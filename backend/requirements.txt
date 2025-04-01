@@ -1,0 +1,12 @@
+fastapi>=0.90.0 # Specify minimum version for lifespan context manager
+uvicorn[standard]>=0.20.0 # Use standard for websockets, etc.
+yt-dlp>=2023.07.06 # Keep yt-dlp updated
+ffmpeg-python>=0.2.0
+demucs>=4.0.0 # Check compatibility if needed
+openai-whisper>=20231117
+torch>=2.0.0 # Check compute capability requirements for your GPU
+# torch torchvision torchaudio # Install specific compute platform if needed e.g. +cu118
+pytest>=7.0.0
+pytest-asyncio>=0.20.0
+lyricsgenius>=3.0.0 # Added for lyrics fetching
+python-dotenv>=1.0.0 # Added for .env loading

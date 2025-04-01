@@ -1,0 +1,2 @@
+rootProject.name = "KaraokeAndroid"
+include(":app")

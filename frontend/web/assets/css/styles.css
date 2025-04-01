@@ -1,0 +1,823 @@
+/* File: frontend/web/assets/css/styles.css */
+/* Karaoke App Styles - Modernized */
+
+/* --- CSS Variables --- */
+:root {
+  /* Font */
+  --font-family-main: 'Sora', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol"; /* Using Sora as primary */
+
+  /* Sizes & Radii */
+  --border-radius-sm: 6px;
+  --border-radius-md: 10px;
+  --border-radius-lg: 16px;
+  --container-max-width: 850px;
+  --padding-base: 1rem;
+  --padding-lg: 1.5rem;
+
+  /* Dark Theme (Default) - Cyberpunk/Neon Inspired */
+  --bg-color: #0d0d1a; /* Darker space blue/purple */
+  --bg-blur-overlay: rgba(13, 13, 26, 0.6); /* Matching bg with transparency */
+  --text-color: #e8e8ff; /* Slightly tinted white */
+  --text-color-secondary: #a0a0cc; /* Muted lavender */
+  --container-bg: rgba(26, 26, 42, 0.75); /* Semi-transparent dark container */
+  --input-bg: rgba(15, 15, 25, 0.8); /* Darker input background */
+  --border-color: #303050; /* Dark purple/blue border */
+  --border-color-light: #484870; /* Lighter version */
+  --primary-color: #00f0ff; /* Bright Cyan Neon */
+  --primary-color-hover: #00d0e0;
+  --secondary-color: #a040ff; /* Vibrant Purple Neon */
+  --secondary-color-hover: #8a2be2;
+  --primary-gradient: linear-gradient(90deg, var(--secondary-color), var(--primary-color)); /* Purple to Cyan gradient */
+  --error-color: #ff4060; /* Neon Red/Pink */
+  --success-color: #40ff80; /* Neon Green */
+  --suggestion-bg: rgba(20, 20, 35, 0.9); /* Dark blurred suggestion */
+  --suggestion-hover-bg: rgba(35, 35, 60, 0.95);
+  --stem-player-bg: rgba(30, 30, 50, 0.6); /* Semi-transparent stem player */
+  --stem-container-bg: rgba(20, 20, 35, 0.8); /* Darker transparent stem container */
+  --progress-track-bg: rgba(48, 48, 80, 0.5);
+  --checkbox-accent: var(--primary-color);
+  --wavesurfer-cursor: var(--primary-color);
+  --neon-glow-primary: 0 0 5px var(--primary-color), 0 0 10px var(--primary-color), 0 0 15px var(--primary-color);
+  --neon-glow-secondary: 0 0 5px var(--secondary-color), 0 0 10px var(--secondary-color);
+  --backdrop-blur-amount: 8px;
+}
+
+body.light-mode {
+  /* Light Theme - Minimalist/Apple Inspired */
+  --bg-color: #f7f7fd; /* Very light lavender */
+  --bg-blur-overlay: rgba(247, 247, 253, 0.7);
+  --text-color: #2c2c3e; /* Dark text */
+  --text-color-secondary: #6a6a80; /* Medium gray text */
+  --container-bg: rgba(255, 255, 255, 0.85); /* White container with slight blur */
+  --input-bg: rgba(240, 240, 250, 0.9); /* Light gray input */
+  --border-color: #dadae8;
+  --border-color-light: #e8e8f0;
+  --primary-color: #6a00ff; /* Refined Purple for light mode */
+  --primary-color-hover: #5800d4;
+  --secondary-color: #007aff; /* Apple Blue */
+  --secondary-color-hover: #005fcc;
+  --primary-gradient: linear-gradient(90deg, var(--primary-color), var(--secondary-color));
+  --error-color: #d70022; /* Strong red */
+  --success-color: #28a745; /* Standard green */
+  --suggestion-bg: rgba(255, 255, 255, 0.98);
+  --suggestion-hover-bg: #f0f0f5;
+  --stem-player-bg: rgba(240, 240, 245, 0.8);
+  --stem-container-bg: rgba(255, 255, 255, 0.9);
+  --progress-track-bg: rgba(225, 225, 230, 0.9);
+  --checkbox-accent: var(--primary-color);
+  --wavesurfer-cursor: var(--primary-color);
+  --neon-glow-primary: none; /* No neon glow in light mode */
+  --neon-glow-secondary: none;
+  --backdrop-blur-amount: 10px; /* Can be slightly different */
+}
+
+/* --- Base Styles --- */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: var(--font-family-main);
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  line-height: 1.6;
+  padding: var(--padding-lg);
+  transition: background-color 0.4s ease, color 0.4s ease;
+  font-weight: 400; /* Default weight */
+  position: relative;
+  min-height: 100vh;
+}
+
+/* --- Glassmorphism Background Layer --- */
+body::before {
+  content: '';
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--bg-blur-overlay);
+  backdrop-filter: blur(var(--backdrop-blur-amount));
+  z-index: -1; /* Behind content */
+  transition: background-color 0.4s ease, backdrop-filter 0.4s ease;
+}
+
+/* --- Animated Gradient Background (Subtle) --- */
+#gradient-background {
+  position: fixed;
+  top: 0; left: 0; width: 100%; height: 100%;
+  overflow: hidden; z-index: -2; /* Behind blur layer */
+  background: linear-gradient(135deg, #1a0033, #001a33, #1a001a);
+  background-size: 300% 300%;
+  animation: gradient-shift 25s ease infinite;
+}
+
+body.light-mode #gradient-background {
+  background: linear-gradient(135deg, #e0e0ff, #e0f0ff, #f0e0ff);
+  animation-duration: 35s;
+}
+
+@keyframes gradient-shift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+
+/* --- Container & Header --- */
+.container {
+  max-width: var(--container-max-width);
+  margin: 60px auto; /* More space around */
+  background: var(--container-bg);
+  border-radius: var(--border-radius-lg);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
+  padding: calc(var(--padding-lg) * 1.5) calc(var(--padding-lg) * 1.8); /* More padding */
+  border: 1px solid var(--border-color-light);
+  transition: background-color 0.4s ease, border-color 0.4s ease;
+}
+body.light-mode .container {
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.1);
+  border: 1px solid var(--border-color);
+}
+
+.header {
+  text-align: center;
+  margin-bottom: 40px;
+}
+.header h1 {
+  font-size: 2.8rem; /* Larger title */
+  margin-bottom: 12px;
+  font-weight: 700; /* Bold */
+  color: var(--text-color);
+  text-shadow: var(--neon-glow-secondary); /* Subtle glow on header */
+}
+.header p {
+  font-size: 1.15rem;
+  color: var(--text-color-secondary);
+}
+
+/* --- Input Section --- */
+.input-section {
+    margin-bottom: 25px;
+}
+.input-group {
+  display: flex;
+  position: relative;
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius-md);
+  overflow: hidden; /* Clip button corners */
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+.input-group:focus-within {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(var(--primary-color-rgb), 0.3); /* Focus ring */
+}
+.input-group input {
+  flex: 1;
+  padding: 16px 20px; /* Generous padding */
+  font-size: 1.05rem;
+  font-family: var(--font-family-main);
+  border: none;
+  outline: none;
+  background-color: var(--input-bg);
+  color: var(--text-color);
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+.input-group input::placeholder {
+    color: var(--text-color-secondary);
+    opacity: 0.6;
+}
+
+.input-group .cta-button {
+  padding: 16px 28px;
+  font-size: 1.05rem;
+  font-weight: 600; /* Semi-bold */
+  border: none;
+  background: var(--primary-gradient);
+  color: #fff;
+  cursor: pointer;
+  transition: transform 0.2s ease, filter 0.3s ease;
+  text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+}
+.input-group .cta-button:hover {
+  filter: brightness(1.15);
+  transform: scale(1.02);
+}
+.input-group .cta-button:disabled {
+    filter: grayscale(70%);
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+}
+.button-icon {
+    margin-right: 8px;
+    font-size: 1.1em; /* Slightly larger icon */
+}
+
+.preview-section {
+    margin-top: 10px;
+    text-align: center;
+}
+.chosen-title {
+    font-size: 0.9rem;
+    color: var(--text-color-secondary);
+    margin-top: 5px;
+    margin-bottom: 10px;
+    min-height: 1.2em;
+    transition: color 0.3s ease;
+}
+#video-preview {
+  display: none;
+  max-width: 160px; /* Consistent preview size */
+  height: 90px;
+  object-fit: cover;
+  margin: 0 auto 10px auto; /* Center */
+  border-radius: var(--border-radius-sm);
+  border: 1px solid var(--border-color-light);
+  transition: border-color 0.3s ease;
+}
+
+
+/* --- Options Group --- */
+.options-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 15px 25px; /* Row and column gap */
+  margin-bottom: 30px;
+  padding: var(--padding-base) var(--padding-lg);
+  background: rgba(var(--text-color-rgb), 0.05); /* Subtle background based on text color */
+  border-radius: var(--border-radius-md);
+  border: 1px solid var(--border-color);
+  transition: background-color 0.3s ease, border-color 0.3s ease;
+}
+.option-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.option-item label {
+  font-size: 0.95rem;
+  color: var(--text-color-secondary);
+  transition: color 0.3s ease;
+  cursor: pointer; /* For checkbox labels */
+}
+.option-item select {
+  padding: 8px 12px;
+  font-size: 0.9rem;
+  font-family: var(--font-family-main);
+  border-radius: var(--border-radius-sm);
+  border: 1px solid var(--border-color);
+  background-color: var(--input-bg);
+  color: var(--text-color);
+  cursor: pointer;
+  transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+}
+.option-item select:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 2px rgba(var(--primary-color-rgb), 0.2);
+}
+.option-item input[type="checkbox"] {
+  cursor: pointer;
+  width: 18px; height: 18px;
+  accent-color: var(--checkbox-accent);
+}
+.checkbox-item { flex-shrink: 0; } /* Prevent checkbox wrapping weirdly */
+
+/* File: frontend/web/assets/css/styles.css */
+/* ... (previous styles remain unchanged) ... */
+
+/* Style to hide elements */
+.option-item.hidden {
+  display: none;
+}
+
+/* Fading styles for disabled lyrics options (KEEP THIS for visual cue when enabled/disabled) */
+.options-group.lyrics-disabled .lyrics-option {
+  opacity: 0.5;
+  pointer-events: none;
+}
+.lyrics-option {
+    transition: opacity 0.3s ease, display 0.3s ease; /* Add display transition if needed */
+}
+
+/* ... (rest of the styles remain unchanged) ... */
+
+/* --- Progress Display --- */
+#progress-display {
+  margin: 30px auto;
+  padding: var(--padding-lg);
+  background: rgba(var(--text-color-rgb), 0.03);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius-md);
+  display: none; /* Hidden initially */
+  transition: background-color 0.3s ease, border-color 0.3s ease;
+}
+
+#progress-text-container {
+  text-align: center;
+  margin-bottom: 18px;
+}
+#progress-text {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-color);
+  margin-bottom: 6px;
+}
+#progress-timing {
+  font-size: 0.9rem;
+  color: var(--text-color-secondary);
+}
+
+#progress-bar-container {
+  width: 100%;
+  height: 12px; /* Slightly thicker bar */
+  background: var(--progress-track-bg);
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2);
+  margin-bottom: 20px;
+  transition: background-color 0.3s ease;
+}
+#progress-bar {
+  height: 100%;
+  width: 0%;
+  background: var(--primary-gradient);
+  border-radius: 6px;
+  transition: width 0.4s ease-out;
+  box-shadow: var(--neon-glow-primary);
+}
+body.light-mode #progress-bar { box-shadow: none; }
+
+#progress-steps-container {
+  max-height: 200px; /* Allow more steps visible */
+  overflow-y: auto;
+  background: rgba(var(--text-color-rgb), 0.03);
+  border-radius: var(--border-radius-sm);
+  padding: 12px 15px;
+  text-align: left;
+  border: 1px solid var(--border-color-light);
+  font-size: 0.9rem;
+}
+/* Custom scrollbar for steps */
+#progress-steps-container::-webkit-scrollbar { width: 6px; }
+#progress-steps-container::-webkit-scrollbar-track { background: rgba(var(--text-color-rgb), 0.05); border-radius: 3px; }
+#progress-steps-container::-webkit-scrollbar-thumb { background: var(--border-color-light); border-radius: 3px; }
+#progress-steps-container::-webkit-scrollbar-thumb:hover { background: var(--border-color); }
+
+.progress-step {
+  padding: 6px 0;
+  color: var(--text-color-secondary);
+  border-bottom: 1px solid var(--border-color-light);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.progress-step:last-child { border-bottom: none; }
+.step-time {
+  color: var(--text-color-secondary);
+  opacity: 0.7;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+.step-message {
+    flex-grow: 1; /* Takes remaining space */
+}
+
+
+/* --- Status Message --- */
+#status-message {
+  text-align: center;
+  margin: 20px auto;
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--error-color);
+  min-height: 1.3em; /* Reserve space */
+}
+#status-message.success { /* Add class for success messages */
+    color: var(--success-color);
+}
+
+/* --- Results Area --- */
+.results-area {
+  margin-top: 30px;
+  display: none; /* Hidden initially */
+  border-top: 1px solid var(--border-color);
+  padding-top: 30px;
+}
+.results-area h2 {
+    text-align: center;
+    font-weight: 600;
+    color: var(--text-color-secondary);
+    margin-bottom: 25px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-size: 1.2rem;
+}
+
+/* --- Video Player & Actions --- */
+.video-container {
+  position: relative;
+  width: 100%;
+  margin: 0 auto 30px auto; /* Add bottom margin */
+}
+video {
+  width: 100%;
+  border-radius: var(--border-radius-md);
+  display: block;
+  background-color: #000;
+  border: 1px solid var(--border-color);
+}
+.video-actions {
+    margin-top: var(--padding-lg);
+    text-align: center;
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap; /* Wrap buttons on small screens */
+    gap: 15px;
+}
+.action-button {
+  display: inline-flex; /* Use flex for icon alignment */
+  align-items: center;
+  gap: 8px;
+  background-color: var(--input-bg);
+  color: var(--text-color-secondary);
+  padding: 10px 20px;
+  border-radius: var(--border-radius-sm);
+  text-decoration: none;
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 500;
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease, transform 0.1s ease;
+}
+.action-button:hover {
+  background-color: var(--container-bg);
+  border-color: var(--border-color-light);
+  color: var(--text-color);
+  transform: translateY(-1px);
+}
+.action-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+    background-color: var(--input-bg); /* Ensure disabled looks consistent */
+    color: var(--text-color-secondary);
+    border-color: var(--border-color);
+}
+/* Primary action button style (e.g., Download) */
+.action-button.primary {
+    background: var(--secondary-color);
+    border-color: var(--secondary-color);
+    color: #fff;
+}
+.action-button.primary:hover {
+    background: var(--secondary-color-hover);
+    border-color: var(--secondary-color-hover);
+    color: #fff;
+}
+.action-button.primary:disabled {
+    filter: grayscale(50%);
+}
+
+
+/* --- Suggestions Dropdown --- */
+#suggestion-dropdown {
+  position: absolute; /* Positioned by JS */
+  display: none;
+  background-color: var(--suggestion-bg);
+  backdrop-filter: blur(var(--backdrop-blur-amount));
+  border: 1px solid var(--border-color-light);
+  border-top: none;
+  border-radius: 0 0 var(--border-radius-md) var(--border-radius-md);
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+  z-index: 1001;
+
+  max-height: 45vh; /* Use viewport height */
+  overflow-y: auto;
+  transition: background-color 0.3s ease, border-color 0.3s ease;
+}
+/* Custom scrollbar for suggestions */
+#suggestion-dropdown::-webkit-scrollbar { width: 5px; }
+#suggestion-dropdown::-webkit-scrollbar-track { background: transparent; }
+#suggestion-dropdown::-webkit-scrollbar-thumb { background: var(--border-color-light); border-radius: 3px; }
+#suggestion-dropdown::-webkit-scrollbar-thumb:hover { background: var(--border-color); }
+
+.suggestion-item {
+  display: flex;
+  align-items: center;
+  padding: 12px var(--padding-lg);
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-color);
+  transition: background-color 0.2s ease;
+}
+.suggestion-item:last-child { border-bottom: none; }
+.suggestion-item:hover { background-color: var(--suggestion-hover-bg); }
+
+.suggestion-thumbnail {
+  width: 90px; height: 50px; /* Slightly larger thumbnail */
+  object-fit: cover;
+  border-radius: var(--border-radius-sm);
+  margin-right: 15px;
+  flex-shrink: 0;
+  border: 1px solid var(--border-color-light);
+}
+.suggestion-title {
+  font-size: 1rem;
+  color: var(--text-color);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-grow: 1;
+}
+
+/* --- Stems Area --- */
+#stems-section {
+    margin-top: 40px; /* Space above stems */
+    display: none; /* Hidden initially */
+}
+#global-stem-controls {
+    margin-bottom: 20px;
+    display: flex;
+    justify-content: center; /* Center buttons */
+    flex-wrap: wrap;
+    gap: 12px;
+}
+/* Use action-button styles for consistency */
+.stem-global-btn { } /* Inherits from .action-button */
+
+#stems-container {
+  padding: var(--padding-lg);
+  border-radius: var(--border-radius-md);
+  background: var(--stem-container-bg);
+  backdrop-filter: blur(calc(var(--backdrop-blur-amount) / 2));
+  border: 1px solid var(--border-color);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.15);
+  /* Changed to Flexbox Column */
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--padding-lg) * 0.8); /* Adjust gap between vertical players */
+}
+/* Remove grid-specific styles if any were added previously */
+
+.stem-player {
+  background: var(--stem-player-bg);
+  padding: var(--padding-base);
+  border-radius: var(--border-radius-sm);
+  border: 1px solid var(--border-color-light);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition: background-color 0.3s, border-color 0.3s;
+}
+.stem-label {
+  font-weight: 600;
+  font-size: 1rem;
+  color: var(--text-color);
+  text-align: center;
+  margin-bottom: 5px; /* Add some space below label */
+}
+.waveform-container {
+  border-radius: var(--border-radius-sm);
+  background-color: rgba(0,0,0, 0.15);
+  overflow: hidden;
+}
+wave > wave { z-index: 2 !important; }
+
+.stem-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+.stem-control-btn {
+  padding: 8px 14px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  border: none;
+  border-radius: var(--border-radius-sm);
+  background-color: var(--secondary-color);
+  color: #fff;
+  cursor: pointer;
+  transition: background-color 0.2s ease, transform 0.1s ease;
+  flex-shrink: 0; /* Prevent buttons shrinking too much */
+}
+.stem-control-btn:hover {
+  background-color: var(--secondary-color-hover);
+  transform: scale(1.05);
+}
+.stem-control-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+    background-color: var(--secondary-color);
+}
+
+.stem-volume-slider {
+  flex-grow: 1;
+  height: 8px;
+  cursor: pointer;
+  accent-color: var(--primary-color);
+  background: var(--border-color-light);
+  border-radius: 4px;
+  overflow: hidden;
+  -webkit-appearance: none;
+  appearance: none;
+  transition: background-color 0.3s;
+}
+.stem-volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px; height: 16px;
+  background: var(--primary-color);
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid var(--bg-color);
+  box-shadow: var(--neon-glow-primary);
+}
+body.light-mode .stem-volume-slider::-webkit-slider-thumb { box-shadow: none; border: none; }
+.stem-volume-slider::-moz-range-thumb {
+  width: 16px; height: 16px;
+  background: var(--primary-color);
+  border-radius: 50%;
+  border: none; cursor: pointer;
+  border: 2px solid var(--bg-color);
+}
+body.light-mode .stem-volume-slider::-moz-range-thumb { border: none; }
+
+.stem-player.load-error {
+  opacity: 0.6;
+  border: 1px dashed var(--error-color);
+}
+
+/* WaveSurfer cursor color is set via JS using CSS var */
+wave > wave { z-index: 2 !important; /* Ensure cursor is above progress */ }
+
+
+
+/* --- Theme Switcher --- */
+#theme-switcher {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  padding: 0;
+  width: 44px; height: 44px; /* Slightly larger */
+  background-color: var(--input-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 50%;
+  color: var(--text-color);
+  font-size: 1.5rem;
+  cursor: pointer;
+  z-index: 1001;
+  transition: all 0.3s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+}
+#theme-switcher:hover {
+  background-color: var(--container-bg);
+  transform: scale(1.1) rotate(15deg); /* Add rotation */
+  border-color: var(--border-color-light);
+  box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+}
+
+
+/* --- Media Queries for Responsiveness --- */
+@media (max-width: 900px) {
+    :root { --container-max-width: 95%; }
+    .container { padding: var(--padding-lg) calc(var(--padding-lg) * 1.2); }
+    .header h1 { font-size: 2.4rem; }
+}
+
+@media (max-width: 768px) {
+    body { padding: var(--padding-base); }
+    .container { margin: 30px auto; padding: var(--padding-lg); }
+    .header h1 { font-size: 2rem; }
+    .header p { font-size: 1rem; }
+    .input-group { flex-direction: column; gap: 10px; }
+    .input-group .cta-button { width: 100%; padding: 14px; } /* Adjust padding */
+    .input-group input { padding: 14px 16px; }
+    .options-group { flex-direction: column; align-items: stretch; gap: 15px; } /* Stretch items */
+    #stems-container { grid-template-columns: 1fr; } /* Single column */
+}
+
+@media (max-width: 480px) {
+    :root {
+        --padding-base: 0.8rem;
+        --padding-lg: 1rem;
+    }
+    .header h1 { font-size: 1.8rem; }
+    .header p { font-size: 0.9rem; }
+    .action-button { font-size: 0.9rem; padding: 8px 16px; }
+    .stem-player { padding: 0.8rem; }
+    #theme-switcher { width: 38px; height: 38px; font-size: 1.3rem; top: 10px; right: 10px; }
+}
+
+/* File: frontend/web/assets/css/styles.css */
+/* ... (all previous styles remain unchanged) ... */
+
+/* --- Progress Steps Enhancements --- */
+.progress-step {
+  /* Make space for the indicator */
+  padding-left: 25px;
+  position: relative; /* Needed for absolute positioning of indicator */
+}
+
+/* Activity Indicator for Steps */
+.progress-step.active-step::before {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 10px;
+  height: 10px;
+  background-color: var(--primary-color);
+  border-radius: 50%;
+  box-shadow: var(--neon-glow-primary); /* Neon glow */
+  animation: pulse 1.5s infinite ease-in-out;
+}
+body.light-mode .progress-step.active-step::before {
+    box-shadow: none; /* No glow in light mode */
+    background-color: var(--secondary-color); /* Use secondary color in light mode */
+}
+
+
+@keyframes pulse {
+  0% {
+    transform: translateY(-50%) scale(0.8);
+    opacity: 0.7;
+  }
+  50% {
+    transform: translateY(-50%) scale(1.1);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-50%) scale(0.8);
+    opacity: 0.7;
+  }
+}
+
+/* Style for completed steps (optional) */
+.progress-step.completed-step {
+  opacity: 0.7;
+  /* filter: grayscale(50%); */ /* Example: make completed steps gray */
+}
+.progress-step.completed-step::before {
+   /* Style for completed indicator, e.g., a checkmark or different color */
+   /* Example: change background */
+   background-color: var(--success-color);
+   animation: none; /* Stop animation */
+   box-shadow: none;
+   opacity: 0.8;
+   transform: translateY(-50%) scale(0.9); /* Make it slightly smaller */
+}
+
+/* --- Suggestion Spinner --- */
+.spinner {
+  display: inline-block;
+  border: 3px solid rgba(var(--text-color-rgb), 0.2);
+  border-radius: 50%;
+  border-top-color: var(--primary-color);
+  width: 20px;
+  height: 20px;
+  animation: spin 1s ease-in-out infinite;
+  /* Positioning: Absolute relative to the input-group */
+  position: absolute;
+  /* Adjust right position to be left of the button */
+  right: calc(100px + 20px); /* Approx button width + gap */
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 10; /* Higher z-index */
+  pointer-events: none; /* Prevent interfering with input clicks */
+}
+
+body.light-mode .spinner {
+    border-top-color: var(--secondary-color);
+}
+
+@keyframes spin {
+  to {
+    transform: translateY(-50%) rotate(360deg);
+  }
+}
+
+/* Adjust spinner position if button wraps on small screens */
+@media (max-width: 768px) {
+    .input-group .spinner {
+        /* Position near top-right corner of the input field itself */
+        right: 15px;
+        top: 15px;
+        transform: none; /* Reset transform */
+    }
+}
+/* --- Favicon (using data URL) --- */
+/* No specific CSS needed, JS will update the link href */
+
+/* --- Favicon (using data URL) --- */
+/* No specific CSS needed, JS will update the link href */
