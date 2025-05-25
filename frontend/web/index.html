@@ -1,124 +1,171 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8" />
-    <title>Karaoke Generator</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <meta charset="UTF-8"/>
+    <title>YouTube Karaoke Generator</title> <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/assets/css/styles.css" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link id="favicon" rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎤</text></svg>">
-    <meta name="description" content="Generate karaoke videos from YouTube links or searches with audio stems.">
+
+    <link rel="stylesheet" href="/assets/css/base.css"/>
+    <link rel="stylesheet" href="/assets/css/layout.css"/>
+    <link rel="stylesheet" href="/assets/css/components/input.css"/>
+    <link rel="stylesheet" href="/assets/css/components/options.css"/>
+    <link rel="stylesheet" href="/assets/css/components/genius.css"/>
+    <link rel="stylesheet" href="/assets/css/components/progress.css"/>
+    <link rel="stylesheet" href="/assets/css/components/results.css"/>
+    <link rel="stylesheet" href="/assets/css/components/stems.css"/>
+    <link rel="stylesheet" href="/assets/css/components/theme.css"/>
+    <link rel="stylesheet" href="/assets/css/components/misc.css"/>
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <link id="favicon" rel="icon"
+          href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎤</text></svg>"> <meta name="description" content="Generate karaoke videos from YouTube links or searches with audio stems separation and lyrics.">
+    <meta name="keywords" content="karaoke, youtube, generator, stems, lyrics, demucs, whisper, ai, music">
 </head>
 <body>
-    <div id="gradient-background"></div>
+<div id="gradient-background"></div>
 
-    <button id="theme-switcher" title="Toggle theme">
-        <span class="icon">☀️</span>
-    </button>
+<button id="theme-switcher" title="Toggle theme" aria-label="Toggle theme">
+    <span class="icon">☀️</span> </button>
 
-    <main class="container">
-        <header class="header">
-            <h1>Karaoke Generator</h1>
-            <p>Transform YouTube videos or searches into karaoke tracks</p>
-        </header>
+<main class="container">
+    <header class="header">
+        <h1>Karaoke Generator</h1>
+        <p>Transform YouTube videos or searches into karaoke tracks</p>
+    </header>
 
-        <section class="input-section" aria-labelledby="input-heading">
-            <div class="input-group">
-                <input type="text" id="youtube-url" placeholder="Enter YouTube link or search query..." aria-label="YouTube link or search query" autocomplete="off" />
+    <section class="input-section">
+        <div class="input-group">
+            <div id="suggestion-dropdown" role="listbox" style="visibility: hidden; opacity: 0;"></div>
+            <input type="text" id="youtube-url" placeholder="Enter YouTube URL or search query..."
+                   aria-label="YouTube URL or Search Query" aria-autocomplete="list" aria-controls="suggestion-dropdown"/>
+            <button id="process-btn" class="cta-button">
+                <span class="button-icon" aria-hidden="true">✨</span> Process
                 <div id="suggestion-spinner" class="spinner" style="display: none;"></div>
-                <button id="process-btn" class="cta-button">
-                    <span class="button-icon" aria-hidden="true">✨</span> Process
-                </button>
-            </div>
-             <div class="preview-section">
-                 <img id="video-preview" alt="Selected video thumbnail preview" style="display: none;" />
-                 <div id="chosen-video-title" class="chosen-title" aria-live="polite"></div>
-             </div>
-        </section>
+            </button>
+        </div>
+        <div class="preview-section">
+            <img id="video-preview" alt="Selected video thumbnail preview" style="display: none;"/>
+            <div id="chosen-video-title" class="chosen-title" aria-live="polite"></div>
+        </div>
+    </section>
 
-        <section class="options-group" aria-labelledby="options-heading">
-             <div class="option-item checkbox-item">
-                <input type="checkbox" id="generate-subtitles-checkbox" checked />
-                <label for="generate-subtitles-checkbox">Add Lyrics</label>
-            </div>
-            <div class="option-item lyrics-option">
-                <label for="language-select" class="lyrics-option-label">Language:</label>
-                <select id="language-select" aria-label="Select lyrics language">
-                    <option value="en">English</option>
-                    <option value="ru">Русский (Russian)</option>
-                    <option value="ja">日本語 (Japanese)</option>
-                    <option value="ko">한국어 (Korean)</option>
-                    <option value="zh">中文 (Chinese)</option>
-                    <option value="fr">Français (French)</option>
-                    <option value="de">Deutsch (German)</option>
-                    <option value="es">Español (Spanish)</option>
-                    <option value="it">Italiano (Italian)</option>
-                    <option value="pt">Português (Portuguese)</option>
+    <div id="options-wrapper">
+        <div id="subtitle-options-container" style="display: none; opacity: 0; max-height: 0;">
+            <section class="options-group">
+                <div class="option-item checkbox-item">
+                    <input type="checkbox" id="generate-subtitles-checkbox" checked/>
+                    <label for="generate-subtitles-checkbox">Add Lyrics</label>
+                </div>
+                <div class="option-item lyrics-option">
+                    <label for="language-select" class="lyrics-option-label">Language:</label>
+                    <select id="language-select" aria-label="Select lyrics language">
+                        <option value="auto" selected>Auto-Detect</option>
+                        <option value="en">English</option>
+                        <option value="ru">Русский (Russian)</option>
+                        <option value="ja">日本語 (Japanese)</option>
+                        <option value="ko">한국어 (Korean)</option>
+                        <option value="zh">中文 (Chinese)</option>
+                        <option value="fr">Français (French)</option>
+                        <option value="de">Deutsch (German)</option>
+                        <option value="es">Español (Spanish)</option>
+                        <option value="it">Italiano (Italian)</option>
+                        <option value="pt">Português (Portuguese)</option>
+                        </select>
+                </div>
+                <div class="option-item lyrics-option">
+                    <label for="subtitle-position-select" class="lyrics-option-label">Position:</label>
+                    <select id="subtitle-position-select" aria-label="Select lyrics position">
+                        <option value="bottom" selected>Bottom</option>
+                        <option value="top">Top</option>
                     </select>
-            </div>
-            <div class="option-item lyrics-option">
-                <label for="subtitle-position-select" class="lyrics-option-label">Position:</label>
-                <select id="subtitle-position-select" aria-label="Select lyrics position">
-                    <option value="bottom" selected>Bottom</option>
-                    <option value="top">Top</option>
-                </select>
-            </div>
-        </section>
+                </div>
+                <div class="option-item lyrics-option">
+                    <label for="final-subtitle-size-select" class="lyrics-option-label">Subtitle Size:</label>
+                    <select id="final-subtitle-size-select" aria-label="Select final subtitle font size for video">
+                        <option value="24">Small</option>
+                        <option value="30" selected>Medium</option> <option value="36">Large</option>
+                        <option value="42">X-Large</option>
+                    </select>
+                </div>
+            </section>
 
-        <section id="progress-display" style="display: none;" aria-live="polite" aria-atomic="true">
-            <div id="progress-text-container">
-                <div id="progress-text" role="status">0% - Initializing...</div>
-                <div id="progress-timing" class="progress-details">Elapsed: 0s</div> </div>
-            <div id="progress-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-labelledby="progress-text">
-                <div id="progress-bar" style="width: 0%;"></div>
+            <section id="genius-lyrics-container" class="options-group" style="display: none; opacity: 0; max-height: 0;">
+                <div class="genius-header">
+                    <h3 id="genius-heading">Lyrics Source & Preview:</h3>
+                    <button id="lyrics-toggle-btn" class="lyrics-toggle-btn" aria-label="Toggle lyrics preview" aria-expanded="false" title="Toggle lyrics preview"></button>
+                </div>
+                <ul id="genius-lyrics-list" role="listbox" aria-labelledby="genius-heading">
+                    </ul>
+                <div id="lyrics-panel" class="lyrics-preview-panel hidden">
+                    <textarea id="genius-selected-text" readonly aria-label="Selected lyrics preview"></textarea>
+                </div>
+            </section>
+        </div> </div> <section id="progress-display" style="display: none;" aria-live="polite" aria-atomic="true">
+        <div id="progress-text-container">
+            <div id="progress-text" role="status">0% - Initializing...</div>
+            <div id="progress-timing" class="progress-details">Elapsed: 0s</div>
+        </div>
+        <div id="progress-bar-container" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"
+             aria-labelledby="progress-text">
+            <div id="progress-bar" style="width: 0%;"></div>
+        </div>
+        <div class="progress-actions">
+             <button id="cancel-job-btn" class="action-button cancel-button" style="display: none;"> <span class="button-icon">✖️</span> Cancel Job
+             </button>
+         </div>
+        <div id="progress-steps-container" aria-label="Processing steps log">
             </div>
-             <div id="progress-steps-container" aria-label="Processing steps log">
+    </section>
+
+    <div id="status-message" role="alert" style="opacity: 0; max-height: 0;"></div>
+
+    <section class="results-area" style="display: none;">
+        <h2 id="video-title" class="results-heading">Karaoke Video</h2>
+
+        <div class="video-container">
+            <video id="karaoke-video" controls controlsList="nodownload" title="Generated Karaoke Video">
+                Your browser does not support the video tag.
+            </video>
+        </div>
+
+        <div class="video-actions">
+            <a id="download-btn" href="#" download="karaoke_video.mp4" class="action-button primary"
+               style="display: none;">
+                <span class="button-icon" aria-hidden="true">💾</span> Download
+            </a>
+            <button id="share-btn" class="action-button" style="display: none;">
+                <span class="button-icon" aria-hidden="true">🔗</span> Copy Link
+            </button>
+        </div>
+
+        <div id="stems-section" style="display: none;">
+            <h2 class="results-heading">Audio Stems</h2>
+
+            <div id="global-stem-controls">
+                <button id="play-all-stems" class="action-button stem-global-btn"
+                        title="Play/Pause All Stems & Video" disabled>
+                    <span class="button-icon">▶️</span> Play All
+                </button>
+                <button id="reset-all-stems" class="action-button stem-global-btn"
+                        title="Seek All Stems & Video to Start" disabled>
+                    <span class="button-icon">⏪</span> Reset All
+                </button>
+                <div class="global-control-item">
+                    <label for="global-speed" class="global-control-label">Speed:</label>
+                    <input type="range" id="global-speed" min="0.5" max="2.0" step="0.05" value="1.0"
+                           title="Adjust Playback Speed (Does NOT affect Pitch)" disabled/>
+                    <span id="global-speed-value">1.00x</span>
+                </div>
+                <div class="global-control-item">
+                    <input type="checkbox" id="lock-stems" checked disabled/> <label for="lock-stems" class="global-control-label"><span aria-hidden="true">🔒</span> Lock Stems</label>
                  </div>
-        </section>
-
-        <div id="status-message" role="alert"></div>
-
-        <section class="results-area" style="display: none;">
-
-             <div class="video-container">
-                 <h2>Karaoke Video</h2>
-                 <video id="karaoke-video" controls controlsList="nodownload" title="Generated Karaoke Video"></video>
-                 <div class="video-actions">
-                    <a id="download-btn" href="#" download="karaoke_video.mp4" class="action-button primary" style="display: none;">
-                        <span class="button-icon" aria-hidden="true">💾</span> Download
-                    </a>
-                    <button id="share-btn" class="action-button" style="display: none;">
-                        <span class="button-icon" aria-hidden="true">🔗</span> Copy Link
-                    </button>
-                </div>
             </div>
 
-            <div id="stems-section" style="display: none;">
-                 <h2>Audio Stems</h2>
-                 <div id="global-stem-controls">
-                    <button id="play-all-stems" class="action-button stem-global-btn">
-                        <span class="button-icon" aria-hidden="true">▶️</span> Play All
-                    </button>
-                    <button id="pause-all-stems" class="action-button stem-global-btn">
-                         <span class="button-icon" aria-hidden="true">⏸️</span> Pause All
-                    </button>
-                    <button id="stop-all-stems" class="action-button stem-global-btn">
-                         <span class="button-icon" aria-hidden="true">⏹️</span> Stop All
-                    </button>
-                    <button id="reset-all-stems" class="action-button stem-global-btn">
-                        <span class="button-icon" aria-hidden="true">⏪</span> Reset All
-                   </button>
+            <div id="stems-container" aria-label="Individual audio stem players">
                 </div>
-                <div id="stems-container" aria-label="Individual audio stem players">
-                    </div>
-            </div>
-        </section>
+        </div> </section> </main>
 
-    </main>
-
-    <script src="https://unpkg.com/wavesurfer.js@7"></script>
-    <script src="/assets/js/main.js" defer></script>
+<script src="https://unpkg.com/wavesurfer.js@7"></script> <script type="module" src="/assets/js/app.js"></script>
 </body>
 </html>

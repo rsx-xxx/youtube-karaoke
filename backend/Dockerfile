@@ -2,12 +2,21 @@
 
 FROM python:3.10-slim
 
-# Install system dependencies
+# Install system dependencies including librubberband for pitch shifting
 RUN apt-get update && apt-get install -y \
+    # Install build dependencies first if needed for some packages
+    # build-essential \
+    # Install rubberband library first
+    librubberband-dev \
+    # Then install ffmpeg, ensuring it's linked against rubberband if possible
     ffmpeg \
     git \
     sox \
+    # Cleanup
     && rm -rf /var/lib/apt/lists/*
+
+# Set environment variable to potentially help ffmpeg find plugins (might not be needed)
+# ENV LD_LIBRARY_PATH /usr/local/lib:$LD_LIBRARY_PATH
 
 # Copy and install Python dependencies
 COPY requirements.txt /tmp/requirements.txt
