@@ -32,64 +32,46 @@ export async function fetchSuggestions(query, signal) {
     }
 }
 
-/**
- * Starts a video processing job on the backend.
- * @param {string} urlOrSearch - The YouTube URL or search query.
- * @param {string} language - Target language for transcription.
- * @param {string} position - Subtitle position ('top' or 'bottom').
- * @param {boolean} generateSubs - Whether to generate subtitles.
- * @param {string|null} customLyrics - Optional user-provided lyrics text.
- * @param {object|null} pitchShifts - Optional pitch shifts { stemName: semitones }.
- * @param {number} finalFontSize - The desired font size for subtitles in the final video.
- * @returns {Promise<string>} - Resolves with the job ID.
- */
-export async function startProcessingJob(urlOrSearch, language, position, generateSubs, customLyrics = null, pitchShifts = null, finalFontSize = 30) { // *** NEW: Added finalFontSize parameter ***
-    console.log("[API] Starting processing job...");
-    const requestBody = {
-        url: urlOrSearch,
-        language: language,
-        subtitle_position: position,
-        generate_subtitles: generateSubs,
+export const API_START_JOB = '/api/process'
+export const API_CANCEL_JOB = '/api/cancel-job'
+
+export async function startProcessingJob(
+    urlOrSearch,
+    language,
+    position,
+    generateSubs,
+    customLyrics,
+    pitchShifts,
+    finalFontSize
+) {
+    const body = {
+        url_or_search: urlOrSearch,
+        language,
+        position,
+        generate_subtitles: !!generateSubs,
         custom_lyrics: customLyrics,
         pitch_shifts: pitchShifts,
-        final_font_size: finalFontSize // *** NEW: Include final_font_size in the body ***
-    };
-    console.log("[API] Request body:", JSON.stringify(requestBody, null, 2));
-
-    try {
-        const response = await fetch(API_PROCESS, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Accept": "application/json"
-            },
-            body: JSON.stringify(requestBody)
-        });
-
-        if (!response.ok) {
-            let errorMsg = `Error ${response.status}: ${response.statusText}`;
-            try {
-                const errorData = await response.json();
-                errorMsg = (errorData && errorData.detail) ? errorData.detail : errorMsg;
-            } catch (e) {
-                console.warn("[API] Could not parse error response body as JSON.");
-            }
-            throw new Error(errorMsg);
-        }
-
-        const data = await response.json();
-        if (!data || !data.job_id) {
-             throw new Error("Backend response OK but missing 'job_id'.");
-        }
-        console.log("[API] Job started successfully. Job ID:", data.job_id);
-        return data.job_id;
-
-    } catch (error) {
-        console.error("[API] Failed to start processing job:", error);
-        throw error; // Re-throw the error to be caught by the caller
+        final_subtitle_size: finalFontSize
     }
+    const r = await fetch(API_START_JOB, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+    })
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    const j = await r.json()
+    if (!j || !j.job_id) throw new Error('Invalid response')
+    return j.job_id
 }
 
+export async function cancelJob(jobId, signal) {
+    const r = await fetch(`${API_CANCEL_JOB}?job_id=${encodeURIComponent(jobId)}`, {
+        method: 'POST',
+        signal
+    })
+    if (!r.ok) throw new Error(`Cancel failed ${r.status}`)
+    return r.json()
+}
 /** Sends a request to cancel a job using the Beacon API (best effort). */
 export function cancelJobBeacon(jobId) {
     if (!jobId) {

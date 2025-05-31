@@ -1,7 +1,5 @@
 # File: backend/lyrics_processing.py
 # Handles lyrics fetching, cleaning, and alignment with word-level timings.
-# UPDATED (v6): Added more detailed logging for Genius search failures.
-
 import os
 import re
 import difflib
@@ -12,32 +10,35 @@ from typing import Optional, List, Dict, Tuple, Any
 # Use rapidfuzz if available for potentially faster/better fuzzy matching
 try:
     import rapidfuzz.fuzz as fuzz
-    import rapidfuzz.process as process
+    import rapidfuzz.process as process  # For extractOne
+
     USE_RAPIDFUZZ = True
     logging.getLogger(__name__).info("Using rapidfuzz for word alignment.")
 except ImportError:
     USE_RAPIDFUZZ = False
-    logging.getLogger(__name__).warning("rapidfuzz not found. Falling back to difflib for word alignment (might be slower/less accurate).")
+    logging.getLogger(__name__).warning(
+        "rapidfuzz not found. Falling back to difflib for word alignment (might be slower/less accurate).")
 
 # Try importing lyricsgenius and the specific Song class
 try:
     import lyricsgenius
-    # Import the Song class directly
+    # Import the Song class directly if possible for type hinting
     from lyricsgenius.song import Song as GeniusSongObject
+
     HAVE_LYRICSGENIUS = True
 except ImportError:
     lyricsgenius = None
     # Define fallback type hint if import fails
-    GeniusSongObject = Any # type: ignore
+    GeniusSongObject = Any  # type: ignore
     HAVE_LYRICSGENIUS = False
     logging.getLogger(__name__).warning("`lyricsgenius` library not found. Genius lyrics fetching will be disabled.")
 except AttributeError:
     # Handle cases where lyricsgenius might be installed but 'song' module or 'Song' class isn't found
     lyricsgenius = None
-    GeniusSongObject = Any # type: ignore
+    GeniusSongObject = Any  # type: ignore
     HAVE_LYRICSGENIUS = False
-    logging.getLogger(__name__).error("Could not import 'Song' from 'lyricsgenius.song'. Genius features might be broken.")
-
+    logging.getLogger(__name__).error(
+        "Could not import 'Song' from 'lyricsgenius.song'. Genius features might be broken.")
 
 from config import settings
 
@@ -46,7 +47,7 @@ logger = logging.getLogger(__name__)
 # --- Configuration ---
 LYRICS_ALIGNMENT_THRESHOLD = settings.LYRICS_ALIGNMENT_THRESHOLD
 # Threshold for considering a whisper word a match for an official word
-WORD_MATCH_THRESHOLD = 75 # Increased slightly (0-100 for rapidfuzz/difflib)
+WORD_MATCH_THRESHOLD = 75  # (0-100 for rapidfuzz/difflib)
 
 NON_LYRIC_KEYWORDS = [
     "transl", "перев", "interpret", "оригин", "subtit", "caption", "sync",
@@ -54,7 +55,7 @@ NON_LYRIC_KEYWORDS = [
     "spoken", "ad-lib", "ad lib", "applause", "cheering", "laughing", "repeat", "fades",
     "текст", "песни", "слова",
     # Add common Genius artifacts
-    "lyrics", "embed", "contributors", "pyong", "tracklist",
+    "lyrics", "embed", "contributors", "pyong", "tracklist", "lyricscontributor", "albumdiscussion"
 ]
 # Regex to remove bracketed content, parenthesized content, HTML tags, asterisk blocks, comments, curly braces
 CLEANING_PATTERN = r'\[.*?\]|\(.*?\)|<.*?>|\*.*?\*|^\s*#.*$|^\s*\{.*?\}\s*$'
@@ -65,7 +66,7 @@ PATTERN_ONLY_PUNCT = re.compile(r'^[\W_]+$')
 # Regex to clean common junk from titles/artists for Genius search
 PATTERN_JUNK_TITLE_ARTIST = re.compile(
     r'\s*\(?'
-    r'(official|video|audio|lyric|lyrics|visualizer|live|acoustic|cover|remix|edit|feat|ft\.?|with|explicit|clean|radio|album|version|deluxe|remastered|original|mix|extended|instrumental)'
+    r'(official|video|audio|lyric|lyrics|visualizer|live|acoustic|cover|remix|edit|feat|ft\.?|with|explicit|clean|radio|album|version|deluxe|remastered|original|mix|extended|instrumental|hq|hd|4k|mv|pv)'
     r'\)?\s*',
     re.IGNORECASE
 )
@@ -75,689 +76,450 @@ PATTERN_SPLIT_WORDS = re.compile(r"([\w'-]+)")
 
 
 # --- Text Processing Functions ---
+def normalize_text(text: str) -> str:
+    """Normalizes text for matching: NFKC, lowercase, remove non-alphanum (keep spaces, hyphens, apostrophes)."""
+    if not isinstance(text, str): return ""
+    text = unicodedata.normalize('NFKC', text).lower()
+    # Allow letters, numbers, spaces, hyphens, apostrophes
+    text = re.sub(r"[^a-z0-9\s'-]", '', text)
+    text = PATTERN_WHITESPACE.sub(' ', text).strip()
+    return text
 
 
+def clean_lyric_line(line: str) -> str:
+    """Cleans a single lyric line by removing common non-lyric patterns."""
+    if not isinstance(line, str): return ""
+    cleaned_line = PATTERN_CLEAN.sub('', line).strip()
+    # Remove lines that are only keywords after cleaning
+    # Check against lowercased keywords for broader matching
+    if cleaned_line.lower() in NON_LYRIC_KEYWORDS or cleaned_line.lower().replace(" ", "") in NON_LYRIC_KEYWORDS:
+        return ""
+    # Remove lines that become only punctuation after cleaning
+    if PATTERN_ONLY_PUNCT.match(cleaned_line):
+        return ""
+    return cleaned_line
 
 
+def split_text_into_words(text: str) -> List[str]:
+    """Splits text into words, respecting hyphens and apostrophes, filters empty."""
+    if not isinstance(text, str): return []
+    return [word for word in PATTERN_SPLIT_WORDS.findall(text) if word]
 
-# --- Lyrics Fetching ---
+
+def clean_search_term(term: Optional[str]) -> str:
+    """Cleans a search term (title/artist) for Genius query."""
+    if not term or not isinstance(term, str): return ''
+    cleaned = PATTERN_JUNK_TITLE_ARTIST.sub(' ', term)
+    cleaned = PATTERN_CLEAN.sub('', cleaned)  # Remove brackets etc.
+    cleaned = PATTERN_EXTRA_SPACES.sub(' ', cleaned).strip(" .,!?;:\"")
+    return cleaned
+
+
+# --- Lyrics Fetching (adapted from one of the provided versions) ---
+def fetch_lyrics_from_genius(
+        song_title: str, artist: Optional[str] = None
+) -> Optional[Tuple[List[str], Optional[GeniusSongObject]]]:
+    """
+    Fetches lyrics from Genius.
+    Returns a tuple: (list_of_cleaned_lyric_lines, genius_song_object) or None if failed.
+    """
+    if not HAVE_LYRICSGENIUS or not settings.GENIUS_API_TOKEN:
+        logger.warning("Genius client not available or API token missing. Skipping Genius fetch.")
+        return None
+
+    genius = lyricsgenius.Genius(
+        settings.GENIUS_API_TOKEN,
+        timeout=20,  # Increased timeout
+        retries=2,
+        verbose=False,  # Set to True for debugging genius client
+        remove_section_headers=True,  # Remove things like [Chorus], [Verse]
+        skip_non_songs=True,
+        excluded_terms=["(Remix)", "(Live)"],  # Exclude common terms
+        response_format='plain',  # Get plain text lyrics
+    )
+
+    clean_title_for_search = clean_search_term(song_title)
+    clean_artist_for_search = clean_search_term(artist) if artist else ""
+
+    if not clean_title_for_search:
+        logger.warning(f"Song title '{song_title}' became empty after cleaning. Cannot search Genius.")
+        return None
+
+    logger.info(
+        f"Searching Genius for title: '{clean_title_for_search}', artist: '{clean_artist_for_search or 'Any'}'.")
+    song_object: Optional[GeniusSongObject] = None
+    search_query_attempts = [
+        (clean_title_for_search, clean_artist_for_search if clean_artist_for_search else None),
+    ]
+    # If artist was provided, try a search with only the title as a fallback
+    if clean_artist_for_search:
+        search_query_attempts.append((clean_title_for_search, None))
+    # Fallback to original uncleaned title if cleaned one fails.
+    if clean_title_for_search != song_title or (artist and clean_artist_for_search != artist):
+        search_query_attempts.append((song_title, artist if artist else None))
+
+    for title_q, artist_q in search_query_attempts:
+        if not title_q: continue  # Skip if title query part is empty
+        try:
+            logger.debug(f"Genius API call with Title='{title_q}', Artist='{artist_q or 'Any'}'")
+            # search_song should handle artist being None or empty string appropriately.
+            song_candidate = genius.search_song(title_q, artist_q if artist_q else "")
+            if song_candidate and isinstance(song_candidate, GeniusSongObject) and song_candidate.lyrics:
+                song_object = song_candidate
+                logger.info(f"Genius found: '{song_object.title}' by '{song_object.artist}'.")
+                break  # Found a suitable song
+        except Exception as e:
+            # lyricsgenius can raise various exceptions, including network errors or custom ones.
+            logger.warning(f"Genius search attempt (Title: {title_q}, Artist: {artist_q}) failed: {e}",
+                           exc_info=False)  # Keep log concise
+
+    if not song_object or not song_object.lyrics:
+        logger.warning(f"No lyrics found on Genius for '{song_title}' by '{artist}'.")
+        return None
+
+    # Process lyrics
+    raw_lyrics_text = song_object.lyrics
+    lines = raw_lyrics_text.split('\n')
+
+    cleaned_lines_final: List[str] = []
+    title_norm_for_check = normalize_text(song_object.title)
+
+    for idx, line_text in enumerate(lines):
+        line_content_stripped = line_text.strip()
+
+        # Stronger check for first line being a title repetition
+        if idx == 0:
+            normalized_line_content = normalize_text(line_content_stripped)
+            is_likely_header = False
+            if title_norm_for_check:  # Proceed only if title_norm is not empty
+                if (title_norm_for_check in normalized_line_content or \
+                    normalized_line_content in title_norm_for_check or \
+                    fuzz.partial_ratio(normalized_line_content, title_norm_for_check) > 85) and \
+                        len(normalized_line_content) < len(title_norm_for_check) + 20:
+                    is_likely_header = True
+                    if "lyrics" in normalized_line_content and len(normalized_line_content.split()) < len(
+                            title_norm_for_check.split()) + 3:
+                        pass
+                    elif len(normalized_line_content.split()) > 10 and fuzz.ratio(normalized_line_content,
+                                                                                  title_norm_for_check) < 70:
+                        is_likely_header = False
+
+            if is_likely_header:
+                logger.debug(f"Skipping first line as it appears to be a title header: '{line_content_stripped}'")
+                continue
+
+        cleaned = clean_lyric_line(line_content_stripped)
+        if cleaned:
+            cleaned_lines_final.append(cleaned)
+
+    if not cleaned_lines_final:
+        logger.warning(f"Lyrics for '{song_object.title}' were empty after all cleaning processes.")
+        return ([], song_object)
+
+    logger.info(
+        f"Successfully fetched and cleaned {len(cleaned_lines_final)} lines from Genius for '{song_object.title}'.")
+    return (cleaned_lines_final, song_object)
 
 
 # --- Alignment Functions ---
 def _find_best_word_match(
         official_word_norm: str,
-        whisper_words_with_indices: List[Tuple[str, int]], # List of (normalized_word, original_index)
-        used_whisper_indices: set
-    ) -> Optional[Tuple[int, float]]: # Return tuple: (best_match_index, best_match_score) or None
-    """Finds the best matching *unused* whisper word index for a given official word."""
+        whisper_words_candidates: List[Tuple[str, int]],
+) -> Optional[Tuple[int, float]]:
+    """Finds the best matching whisper word index from the candidates list for a given official word."""
     best_score = -1.0
-    best_idx = -1
+    best_idx_in_candidates = -1
 
-    available_whisper = [(w_norm, idx) for w_norm, idx in whisper_words_with_indices if idx not in used_whisper_indices]
-    if not available_whisper:
+    if not whisper_words_candidates:
         return None
 
     if USE_RAPIDFUZZ:
-        choices = [w[0] for w in available_whisper]
-        # Use WRatio for better handling of different word lengths
-        match_result = process.extractOne(official_word_norm, choices, scorer=fuzz.WRatio, score_cutoff=WORD_MATCH_THRESHOLD)
+        choices = [w_candidate[0] for w_candidate in whisper_words_candidates]
+        match_result = process.extractOne(official_word_norm, choices, scorer=fuzz.WRatio,
+                                          score_cutoff=WORD_MATCH_THRESHOLD)
         if match_result:
             best_score = match_result[1]
-            choice_index = match_result[2]
-            best_idx = available_whisper[choice_index][1] # Get original index
-    else: # Fallback to difflib
+            best_idx_in_candidates = match_result[2]
+    else:
         matcher = difflib.SequenceMatcher(isjunk=None, autojunk=False)
         matcher.set_seq2(official_word_norm)
-        for w_norm, idx in available_whisper:
-            matcher.set_seq1(w_norm)
-            ratio = matcher.ratio() * 100 # Scale to 0-100
+        for i, (w_norm_candidate, _) in enumerate(whisper_words_candidates):
+            matcher.set_seq1(w_norm_candidate)
+            ratio = matcher.ratio() * 100
             if ratio >= WORD_MATCH_THRESHOLD and ratio > best_score:
                 best_score = ratio
-                best_idx = idx
+                best_idx_in_candidates = i
 
-    if best_idx != -1:
-        # logger.debug(f"Matched '{official_word_norm}' -> '{whisper_words_with_indices[best_idx][0]}' (Index: {best_idx}, Score: {best_score:.1f})")
-        return best_idx, best_score
-    else:
-        # logger.debug(f"No good match found for '{official_word_norm}' (Threshold: {WORD_MATCH_THRESHOLD})")
-        return None
+    if best_idx_in_candidates != -1:
+        return best_idx_in_candidates, best_score
+    return None
+
 
 def prepare_segments_for_karaoke(
-    recognized_segments: List[Dict],
-    official_lyrics: Optional[List[str]] = None
+        recognized_segments: List[Dict],
+        official_lyrics_lines: Optional[List[str]] = None
 ) -> List[Dict]:
-    """
-    Prepares segments for karaoke subtitle generation with word-level timing alignment.
-    Ensures all words in the returned segments have valid 'start' and 'end' times.
-    Uses original recognized segments if official lyrics are not provided or alignment fails.
-    """
-    logger.info(f"Preparing segments for karaoke. Recognized segments: {len(recognized_segments)}. Official lines: {len(official_lyrics) if official_lyrics else 'None'}.")
+    job_id_for_log = "N/A"
+    logger.info(
+        f"Job {job_id_for_log}: Preparing segments for karaoke. Recognized segments: {len(recognized_segments)}. Official lines: {len(official_lyrics_lines) if official_lyrics_lines else 'None'}.")
 
-    # 1. Validate and extract timed words from recognized segments
-    valid_recognized_segments_with_words = []
-    for i, seg in enumerate(recognized_segments):
-        if (isinstance(seg, dict) and 'start' in seg and 'end' in seg and
-            isinstance(seg.get('text'), str) and seg['text'].strip() and
-            isinstance(seg.get('words'), list)):
-            # Extract only words with valid structure and timing
-            valid_words_in_seg = []
-            for w_idx, w in enumerate(seg['words']):
-                if (isinstance(w, dict) and 'start' in w and 'end' in w and
-                    isinstance(w.get('text'), str) and w['text'].strip() and
-                    isinstance(w['start'], (int, float)) and isinstance(w['end'], (int, float)) and
-                    w['end'] >= w['start']):
-                    valid_words_in_seg.append({
-                        "text": w['text'].strip(),
-                        "start": float(w['start']),
-                        "end": float(w['end'])
-                    })
-                # else: logger.debug(f"Skipping invalid word at seg {i}, word {w_idx}: {w}")
+    all_whisper_words_timed: List[Dict] = []
+    for seg_idx, seg in enumerate(recognized_segments):
+        if not (isinstance(seg, dict) and 'start' in seg and 'end' in seg and \
+                isinstance(seg.get('text'), str) and seg['text'].strip() and \
+                isinstance(seg.get('words'), list)):
+            continue
 
-            # Check if segment has valid overall timing and at least one valid word
-            if (isinstance(seg['start'], (int, float)) and isinstance(seg['end'], (int, float)) and
-                seg['end'] >= seg['start'] and valid_words_in_seg):
-                # Adjust segment start/end to match the first/last valid word's timing
-                seg_start_from_words = valid_words_in_seg[0]['start']
-                seg_end_from_words = valid_words_in_seg[-1]['end']
-                valid_recognized_segments_with_words.append({
-                    "start": seg_start_from_words,
-                    "end": seg_end_from_words,
-                    "text": seg['text'].strip(), # Keep original segment text for context/matching
-                    "words": valid_words_in_seg # Store validated words
+        for w_idx, w in enumerate(seg['words']):
+            w_text_value = w.get('text')
+            w_start_value = w.get('start')
+            w_end_value = w.get('end')
+
+            if not (isinstance(w, dict) and \
+                    'start' in w and 'end' in w and \
+                    isinstance(w_text_value, str) and \
+                    isinstance(w_start_value, (int, float)) and \
+                    isinstance(w_end_value, (int, float)) and \
+                    w_end_value >= w_start_value):
+                continue
+
+            w_text_strip = w_text_value.strip()
+            if not w_text_strip:
+                continue
+
+            all_whisper_words_timed.append({
+                "text": w_text_strip,
+                "norm_text": normalize_text(w_text_strip),
+                "start": float(w_start_value),
+                "end": float(w_end_value),
+                "original_segment_idx": seg_idx,
+                "original_word_idx": w_idx
+            })
+    all_whisper_words_timed.sort(key=lambda x: x['start'])
+
+    if not all_whisper_words_timed:
+        logger.warning(
+            f"Job {job_id_for_log}: No valid timed words found in recognized_segments. Cannot generate timed lyrics.")
+        return []
+
+    if not official_lyrics_lines:
+        logger.info(f"Job {job_id_for_log}: No official lyrics provided. Using Whisper's transcription directly.")
+        karaoke_segments_from_whisper = []
+        for seg in recognized_segments:  # Iterate original segments for structure
+            segment_text = seg.get('text', '').strip()
+            words_in_segment = []
+
+            seg_start_time = seg.get('start')
+            seg_end_time = seg.get('end')
+
+            if not (segment_text and isinstance(seg_start_time, (int, float)) and isinstance(seg_end_time,
+                                                                                             (int, float))):
+                continue
+
+            for w_data in seg.get('words', []):
+                w_text_val = w_data.get('text')
+                w_start_val = w_data.get('start')
+                w_end_val = w_data.get('end')
+
+                if not (isinstance(w_data, dict) and 'start' in w_data and 'end' in w_data and \
+                        isinstance(w_text_val, str) and \
+                        isinstance(w_start_val, (int, float)) and \
+                        isinstance(w_end_val, (int, float)) and \
+                        w_end_val >= w_start_val):
+                    continue
+
+                w_text_strip_inner = w_text_val.strip()
+                if not w_text_strip_inner:
+                    continue
+
+                words_in_segment.append({
+                    "text": w_text_strip_inner,
+                    "start": float(w_start_val),
+                    "end": float(w_end_val)
                 })
-            # else: logger.debug(f"Skipping segment {i} due to invalid timing or no valid words.")
 
-    if not valid_recognized_segments_with_words:
-        logger.error("prepare_segments_for_karaoke: No valid recognized segments with timed words found after initial validation.")
-        return [] # Return empty if no usable input
+            if words_in_segment:
+                seg_start_actual = words_in_segment[0]['start']
+                seg_end_actual = words_in_segment[-1]['end']
+                karaoke_segments_from_whisper.append({
+                    "start": seg_start_actual,
+                    "end": seg_end_actual,
+                    "text": segment_text,
+                    "words": words_in_segment,
+                    "aligned": False
+                })
+        logger.info(
+            f"Job {job_id_for_log}: Prepared {len(karaoke_segments_from_whisper)} segments using Whisper transcription.")
+        return karaoke_segments_from_whisper
 
-    # 2. If no official lyrics, return the validated recognized segments directly
-    if not official_lyrics:
-        logger.info("prepare_segments_for_karaoke: No official lyrics provided. Using validated recognized segments directly.")
-        # Ensure sorting by start time
-        valid_recognized_segments_with_words.sort(key=lambda x: x.get('start', float('inf')))
-        return valid_recognized_segments_with_words
+    logger.info(
+        f"Job {job_id_for_log}: Aligning {len(official_lyrics_lines)} official lines with {len(all_whisper_words_timed)} Whisper words.")
+    aligned_karaoke_segments = []
+    current_global_whisper_idx = 0
 
-    # 3. Align official lyrics with validated recognized segments
-    logger.info(f"Aligning {len(official_lyrics)} official lines to {len(valid_recognized_segments_with_words)} validated recognized segments.")
-    aligned_output_segments = []
-    used_segment_indices = set()
-    line_matcher = difflib.SequenceMatcher(isjunk=None, autojunk=False)
-    num_lines_aligned = 0
-    total_official_words = 0
-    total_words_timed_from_whisper = 0
+    for official_line_text in official_lyrics_lines:
+        official_line_text_strip = official_line_text.strip()
+        if not official_line_text_strip: continue
 
-    # Pre-normalize recognized segments for faster matching
-    norm_recognized_data = []
-    for idx, seg_data in enumerate(valid_recognized_segments_with_words):
-           norm_text = normalize_text(seg_data["text"])
-           # Prepare list of (normalized_word, original_word_index_in_segment)
-           whisper_words_norm_idx = [(normalize_text(w.get('text', '')), i) for i, w in enumerate(seg_data["words"])]
-           whisper_words_norm_idx = [item for item in whisper_words_norm_idx if item[0]] # Filter empty normalized words
-           if norm_text and whisper_words_norm_idx: # Ensure segment has text and words to match against
-               norm_recognized_data.append({
-                   "norm_text": norm_text, # Normalized full text of the recognized segment
-                   "original_segment_index": idx, # Index in valid_recognized_segments_with_words
-                   "words_timed": seg_data["words"], # Original list of timed words for this segment
-                   "words_norm_idx": whisper_words_norm_idx # List of (norm_word, index) for matching
-               })
+        official_words_in_line = split_text_into_words(official_line_text_strip)
+        if not official_words_in_line: continue
 
-    if not norm_recognized_data:
-        logger.warning("No recognized segments had valid normalized text and words after preparation. Cannot perform alignment.")
-        return valid_recognized_segments_with_words # Fallback to original recognized segments
+        timed_words_for_this_line = []
 
-    # Iterate through each official lyric line
-    for line_index, official_line in enumerate(official_lyrics):
-        official_line_cleaned = official_line.strip()
-        normalized_official_line = normalize_text(official_line_cleaned)
-        if not official_line_cleaned or not normalized_official_line: continue # Skip empty lines
+        for official_word_idx, official_word_text in enumerate(official_words_in_line):
+            official_word_norm = normalize_text(official_word_text)
+            if not official_word_norm: continue
 
-        # Find the best matching unused recognized segment for this official line
-        best_match_ratio = -1.0
-        best_match_seg_info = None
-        line_matcher.set_seq2(normalized_official_line)
+            word_start, word_end = -1.0, -1.0
 
-        for rec_data in norm_recognized_data:
-            if rec_data["original_segment_index"] in used_segment_indices: continue # Skip already used segments
-            line_matcher.set_seq1(rec_data["norm_text"])
-            ratio = line_matcher.ratio()
-            # Check if ratio meets threshold and is better than previous best match
-            if ratio >= LYRICS_ALIGNMENT_THRESHOLD and ratio > best_match_ratio:
-                best_match_ratio = ratio
-                best_match_seg_info = rec_data
+            search_window_start_idx = current_global_whisper_idx
+            search_window_end_idx = min(len(all_whisper_words_timed), search_window_start_idx + 20)
 
-        # If a good match was found
-        if best_match_seg_info:
-            num_lines_aligned += 1
-            matched_segment_original_idx = best_match_seg_info["original_segment_index"]
-            whisper_words_timed_in_segment = best_match_seg_info["words_timed"]
-            whisper_words_norm_idx_in_segment = best_match_seg_info["words_norm_idx"]
-            # logger.debug(f"Line {line_index} ('{official_line_cleaned[:30]}...') matched segment {matched_segment_original_idx} with ratio {best_match_ratio:.2f}")
-
-            # Split the official line into words and normalize them
-            official_words = split_text_into_words(official_line_cleaned)
-            official_words_norm = [normalize_text(w) for w in official_words]
-            official_words_pairs = [(word, norm) for word, norm in zip(official_words, official_words_norm) if norm] # Pair original with norm, filter empty
-
-            aligned_line_words_data = [] # To store words of the official line with timings
-            used_whisper_word_indices_in_segment = set() # Track used whisper words within this matched segment
-            # Estimate start time for potentially untimed words
-            current_time = whisper_words_timed_in_segment[0]['start'] if whisper_words_timed_in_segment else 0.0
-            total_official_words += len(official_words_pairs)
-
-            # Try to find a timestamp for each word in the official line
-            for off_word_text, off_word_norm in official_words_pairs:
-                match_result = _find_best_word_match(
-                    off_word_norm,
-                    whisper_words_norm_idx_in_segment, # Available whisper words (norm, index)
-                    used_whisper_word_indices_in_segment # Set of already used whisper word indices
+            whisper_candidates_in_window = []
+            for i in range(search_window_start_idx, search_window_end_idx):
+                whisper_candidates_in_window.append(
+                    (all_whisper_words_timed[i]['norm_text'], i)
                 )
-                word_start = -1.0; word_end = -1.0
 
-                if match_result: # Found a timed match in whisper segment
-                    best_whisper_match_idx, match_score = match_result
-                    matched_whisper_word_data = whisper_words_timed_in_segment[best_whisper_match_idx]
-                    word_start = matched_whisper_word_data['start']
-                    word_end = matched_whisper_word_data['end']
-                    used_whisper_word_indices_in_segment.add(best_whisper_match_idx)
-                    current_time = word_end # Update current time based on matched word
-                    total_words_timed_from_whisper += 1
-                    # logger.debug(f"  Word '{off_word_text}' matched whisper idx {best_whisper_match_idx}, time {word_start:.2f}-{word_end:.2f}")
-                else: # No good match found, estimate timing
-                    estimated_duration = 0.35 # Default duration estimate
-                    gap = 0.05 # Small gap between estimated words
-                    word_start = current_time + gap
-                    word_end = word_start + estimated_duration
-                    current_time = word_end # Update current time based on estimate
-                    # logger.debug(f"  Word '{off_word_text}' - timing estimated: {word_start:.2f}-{word_end:.2f}")
+            match_info = None
+            if whisper_candidates_in_window:
+                match_info = _find_best_word_match(official_word_norm, whisper_candidates_in_window)
 
+            if match_info:
+                best_match_idx_in_window = match_info[0]
+                matched_global_whisper_idx = whisper_candidates_in_window[best_match_idx_in_window][1]
 
-                # Add word with timing (either matched or estimated) if valid
-                if isinstance(word_start, (int, float)) and isinstance(word_end, (int, float)) and word_end > word_start:
-                    aligned_line_words_data.append({"text": off_word_text, "start": word_start, "end": word_end})
-                else:
-                    # This should ideally not happen with the estimation logic, but log if it does
-                    logger.warning(f"Skipping official word '{off_word_text}' in line {line_index} due to invalid timing ({word_start}, {word_end}) after alignment/estimation.")
+                matched_whisper_data = all_whisper_words_timed[matched_global_whisper_idx]
+                word_start = matched_whisper_data['start']
+                word_end = matched_whisper_data['end']
 
-            # If we got valid timed words for the line, create the output segment
-            if aligned_line_words_data:
-                seg_start_time = aligned_line_words_data[0]['start']
-                seg_end_time = aligned_line_words_data[-1]['end']
-                if seg_end_time >= seg_start_time: # Final check on segment times
-                    aligned_output_segments.append({
-                        "start": seg_start_time,
-                        "end": seg_end_time,
-                        "text": official_line_cleaned, # Use the original cleaned official line text
-                        "words": aligned_line_words_data, # List of official words with timings
-                        "aligned": True, # Mark as aligned
-                        "confidence": round(best_match_ratio, 3) # Store match confidence
-                    })
-                    used_segment_indices.add(matched_segment_original_idx) # Mark whisper segment as used
-                else:
-                    logger.warning(f"Official line '{official_line_cleaned[:50]}...' (line {line_index}) matched segment {matched_segment_original_idx} but resulting word timings were invalid (end < start).")
+                current_global_whisper_idx = matched_global_whisper_idx + 1
             else:
-                logger.warning(f"No valid words could be timed for official line {line_index}: '{official_line_cleaned[:50]}...' despite matching segment {matched_segment_original_idx}.")
-        # else: logger.debug(f"No suitable segment match found for official line {line_index}: '{official_line_cleaned[:30]}...'")
+                prev_timed_word_end = timed_words_for_this_line[-1]['end'] if timed_words_for_this_line else -1.0
 
+                if prev_timed_word_end > 0:
+                    word_start = prev_timed_word_end + 0.05
+                elif current_global_whisper_idx < len(all_whisper_words_timed):
+                    word_start = all_whisper_words_timed[current_global_whisper_idx]['start']
+                elif aligned_karaoke_segments:
+                    word_start = aligned_karaoke_segments[-1]['end'] + 0.1
+                else:
+                    word_start = 0.0
 
-    alignment_percentage = (num_lines_aligned / len(official_lyrics) * 100) if official_lyrics else 0
-    word_timing_percentage = (total_words_timed_from_whisper / total_official_words * 100) if total_official_words else 0
-    logger.info(f"Alignment complete. Lines matched: {num_lines_aligned}/{len(official_lyrics)} ({alignment_percentage:.1f}%). "
-                f"Official Words Timed via Whisper: {total_words_timed_from_whisper}/{total_official_words} ({word_timing_percentage:.1f}%).")
+                estimated_duration = max(0.15, min(len(official_word_norm) * 0.07, 0.6))
+                word_end = word_start + estimated_duration
 
-    # Sort final segments by start time
-    aligned_output_segments.sort(key=lambda x: x.get('start', float('inf')))
+                new_global_idx_after_estimation = current_global_whisper_idx
+                while new_global_idx_after_estimation < len(all_whisper_words_timed) and \
+                        all_whisper_words_timed[new_global_idx_after_estimation]['start'] < word_end:
+                    new_global_idx_after_estimation += 1
 
-    # Final validation pass on the aligned segments
-    final_validated_segments = []
-    for seg in aligned_output_segments:
-        # Ensure segment has valid words and overall timing
-        valid_words = [w for w in seg.get('words', []) if 'start' in w and 'end' in w and w['end'] >= w['start']]
-        if valid_words and 'start' in seg and 'end' in seg and seg['end'] >= seg['start']:
-            # Optionally readjust segment start/end based on validated words again
-            seg['start'] = valid_words[0]['start']
-            seg['end'] = valid_words[-1]['end']
-            seg['words'] = valid_words
-            final_validated_segments.append(seg)
-        # else: logger.debug(f"Filtered out aligned segment due to invalid final structure: {seg.get('text', '')[:30]}")
+                current_global_whisper_idx = new_global_idx_after_estimation
 
+            if word_start >= 0 and word_end > word_start:
+                timed_words_for_this_line.append({
+                    "text": official_word_text, "start": word_start, "end": word_end
+                })
+            else:
+                logger.warning(
+                    f"Job {job_id_for_log}: Could not assign valid timing for official word '{official_word_text}'. Skipping.")
 
-    if not final_validated_segments and official_lyrics:
-        logger.warning("Alignment process resulted in zero valid output segments despite having official lyrics. Falling back to original recognized segments.")
-        # Ensure fallback is sorted
-        valid_recognized_segments_with_words.sort(key=lambda x: x.get('start', float('inf')))
-        return valid_recognized_segments_with_words
+        if timed_words_for_this_line:
+            seg_start = timed_words_for_this_line[0]['start']
+            seg_end = timed_words_for_this_line[-1]['end']
+            if seg_end >= seg_start:
+                aligned_karaoke_segments.append({
+                    "start": seg_start, "end": seg_end, "text": official_line_text_strip,
+                    "words": timed_words_for_this_line, "aligned": True
+                })
 
-    logger.info(f"Returning {len(final_validated_segments)} segments prepared for karaoke after alignment.")
-    return final_validated_segments
+    logger.info(
+        f"Job {job_id_for_log}: Alignment process created {len(aligned_karaoke_segments)} segments from official lyrics.")
+    if not aligned_karaoke_segments and official_lyrics_lines:
+        logger.warning(f"Job {job_id_for_log}: Alignment with official lyrics resulted in zero segments.")
+
+    return aligned_karaoke_segments
 
 
 def align_custom_lyrics_with_word_times(
         custom_lyrics_text: str,
         recognized_segments: List[Dict]
 ) -> List[Dict]:
-    """
-    Applies word timings from recognized segments sequentially to lines/words from custom text.
-    Ensures all output words have start/end times, estimating if necessary.
-    """
-    logger.info("Applying recognized word timings sequentially to custom lyrics.")
+    job_id_for_log = "N/A"
+    logger.info(f"Job {job_id_for_log}: Applying recognized word timings sequentially to custom lyrics.")
     if not custom_lyrics_text:
-        logger.warning("align_custom_lyrics_with_word_times: Empty custom lyrics text.")
+        logger.warning(f"Job {job_id_for_log}: Empty custom lyrics text provided.")
         return []
 
-    # 1. Extract and validate all word timings from recognized segments
-    all_recognized_word_timings = []
-    for i, seg in enumerate(recognized_segments):
+    all_recognized_word_timings: List[Dict] = []
+    for seg in recognized_segments:
         if isinstance(seg, dict) and 'words' in seg and isinstance(seg['words'], list):
-            for w_idx, w in enumerate(seg['words']):
+            for w in seg['words']:
+                w_start_value = w.get('start')
+                w_end_value = w.get('end')
                 if (isinstance(w, dict) and 'start' in w and 'end' in w and
-                    isinstance(w['start'], (int, float)) and isinstance(w['end'], (int, float)) and
-                    w['end'] >= w['start']):
-                    # Store only start and end time
-                    all_recognized_word_timings.append({
-                        "start": float(w['start']),
-                        "end": float(w['end'])
-                    })
-                # else: logger.debug(f"Skipping invalid word timing at rec seg {i}, word {w_idx}: {w}")
-
+                        isinstance(w_start_value, (int, float)) and isinstance(w_end_value, (int, float)) and
+                        w_end_value >= w_start_value):
+                    all_recognized_word_timings.append({"start": float(w_start_value), "end": float(w_end_value)})
+    all_recognized_word_timings.sort(key=lambda x: x['start'])
 
     if not all_recognized_word_timings:
-        logger.error("align_custom_lyrics_with_word_times: No valid word timings found in recognized segments after flattening and validation.")
+        logger.error(f"Job {job_id_for_log}: No valid word timings from Whisper. Cannot apply to custom lyrics.")
         return []
+    logger.debug(
+        f"Job {job_id_for_log}: Extracted {len(all_recognized_word_timings)} timed words from Whisper for custom lyrics.")
 
-    # Sort timings just in case segments weren't perfectly ordered
-    all_recognized_word_timings.sort(key=lambda w: w.get('start', float('inf')))
-    logger.debug(f"Found {len(all_recognized_word_timings)} valid word timings from recognized segments.")
-
-    # 2. Prepare custom lyrics lines and words
     custom_lines = [line.strip() for line in custom_lyrics_text.splitlines() if line.strip()]
     if not custom_lines:
-        logger.warning("align_custom_lyrics_with_word_times: Custom lyrics text had no valid lines after splitting.")
+        logger.warning(f"Job {job_id_for_log}: Custom lyrics text had no valid lines after splitting.")
         return []
 
-    # 3. Iterate through custom lines and assign timings sequentially
     result_segments = []
-    current_rec_word_index = 0
-    total_recognized_words = len(all_recognized_word_timings)
-    # Initialize last time carefully based on the first available timing
-    last_assigned_end_time = max(0.0, all_recognized_word_timings[0]['start'] - 0.1) if all_recognized_word_timings else 0.0
+    current_rec_word_timing_idx = 0
+    total_rec_timings = len(all_recognized_word_timings)
+    last_assigned_end_time = 0.0
+    if total_rec_timings > 0:
+        last_assigned_end_time = max(0.0, all_recognized_word_timings[0]['start'] - 0.1)
 
-    for line_index, line_text in enumerate(custom_lines):
+    for line_text in custom_lines:
         custom_words_in_line = split_text_into_words(line_text)
-        if not custom_words_in_line: continue # Skip empty lines
+        if not custom_words_in_line: continue
 
-        segment_words_data = [] # To store words for this custom line with timings
-        line_start_time = -1.0
-        line_end_time = -1.0
+        segment_words_data = []
+        line_start_time, line_end_time = -1.0, -1.0
 
-        # Assign timing to each word in the custom line
-        for word_index, custom_word_text in enumerate(custom_words_in_line):
-            word_start = -1.0; word_end = -1.0
+        for custom_word_text in custom_words_in_line:
+            word_start, word_end = -1.0, -1.0
 
-            # Try to get timing from the next available recognized word
-            if current_rec_word_index < total_recognized_words:
-                rec_word_timing = all_recognized_word_timings[current_rec_word_index]
-                word_start = rec_word_timing['start']
-                word_end = rec_word_timing['end']
-
-                # Sanity check for time ordering
+            if current_rec_word_timing_idx < total_rec_timings:
+                rec_timing = all_recognized_word_timings[current_rec_word_timing_idx]
+                word_start = rec_timing['start']
+                word_end = rec_timing['end']
                 if word_start < last_assigned_end_time:
-                    logger.warning(f"Recognized word timing out of order (Start {word_start:.2f} < Last End {last_assigned_end_time:.2f}) at rec_idx {current_rec_word_index} for custom word '{custom_word_text}'. Adjusting start time.")
-                    duration = max(0.05, word_end - word_start) # Keep original duration if possible
-                    word_start = last_assigned_end_time + 0.01 # Add tiny gap
+                    duration = max(0.1, word_end - word_start)
+                    word_start = last_assigned_end_time + 0.01
                     word_end = word_start + duration
-
-                last_assigned_end_time = word_end # Update last assigned time
-                current_rec_word_index += 1
-            else: # Ran out of recognized timings, estimate the rest
-                estimated_duration = 0.35; gap = 0.05
-                word_start = last_assigned_end_time + gap
+                last_assigned_end_time = word_end
+                current_rec_word_timing_idx += 1
+            else:
+                estimated_duration = max(0.15, min(len(custom_word_text) * 0.07, 0.6))
+                word_start = last_assigned_end_time + 0.05
                 word_end = word_start + estimated_duration
-                last_assigned_end_time = word_end # Update last assigned time
-                if word_index == 0 and line_index == len(custom_lines) -1: # Log only once if estimation starts
-                    logger.warning(f"Ran out of recognized word timings ({total_recognized_words} words). Estimating timings for remaining custom words.")
+                last_assigned_end_time = word_end
+                if current_rec_word_timing_idx == total_rec_timings:  # Log only once
+                    logger.info(
+                        f"Job {job_id_for_log}: Exhausted Whisper timings. Estimating for remaining custom words.")
+                    current_rec_word_timing_idx += 1
 
-
-            # Add the custom word with its assigned/estimated timing
             segment_words_data.append({"text": custom_word_text, "start": word_start, "end": word_end})
-
-            # Track line start/end times
             if line_start_time < 0: line_start_time = word_start
             line_end_time = word_end
 
-        # Add the complete line segment if it has words and valid timing
         if segment_words_data and line_start_time >= 0 and line_end_time >= line_start_time:
             result_segments.append({
-                'start': line_start_time,
-                'end': line_end_time,
-                'text': line_text, # The original custom line text
-                'words': segment_words_data,
-                'aligned': False # Mark as not aligned to original whisper text
-                })
-        # else: logger.debug(f"Skipping custom line {line_index} due to missing words or invalid time range.")
+                'start': line_start_time, 'end': line_end_time, 'text': line_text,
+                'words': segment_words_data, 'aligned': False
+            })
 
-
-    logger.info(f"Applied recognized/estimated timings to {len(result_segments)} custom lyric lines using up to {current_rec_word_index} recognized word timings.")
-    # Result segments are already ordered by construction
+    logger.info(f"Job {job_id_for_log}: Applied timings to {len(result_segments)} custom lyric lines.")
     return result_segments
-
-# File: backend/lyrics_processing.py
-# Lyrics fetching, cleaning and timing-alignment utilities.
-# File: backend/lyrics_processing.py
-# Fetching lyrics from Genius, cleaning and word-timing alignment.
-
-import re
-import difflib
-import logging
-import unicodedata
-from typing import Optional, List, Tuple, Any
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Optional speed-ups
-# ─────────────────────────────────────────────────────────────────────────────
-try:
-    import rapidfuzz.fuzz as fuzz
-    import rapidfuzz.process as process
-    USE_RAPIDFUZZ = True
-    logging.getLogger(__name__).info("rapidfuzz active")
-except ImportError:
-    USE_RAPIDFUZZ = False
-    logging.getLogger(__name__).warning("rapidfuzz unavailable – using difflib")
-
-# Genius client
-try:
-    import lyricsgenius
-    from lyricsgenius.song import Song as GeniusSongObject
-    HAVE_LYRICSGENIUS = True
-except (ImportError, AttributeError):
-    lyricsgenius = None
-    GeniusSongObject = Any       # type: ignore
-    HAVE_LYRICSGENIUS = False
-    logging.getLogger(__name__).warning("lyricsgenius missing – Genius disabled")
-
-from config import settings
-
-log = logging.getLogger(__name__)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Regex / constants
-# ─────────────────────────────────────────────────────────────────────────────
-LYRICS_ALIGNMENT_THRESHOLD = settings.LYRICS_ALIGNMENT_THRESHOLD
-WORD_MATCH_THRESHOLD = 75
-
-RX_WS = re.compile(r'\s+')
-RX_CLEAN = re.compile(r'\[.*?]|\(.*?]|\{.*?}]|<.*?>|\*.*?\*|^\s*#.*$')
-RX_ONLY_PUNCT = re.compile(r'^[\W_]+$')
-RX_EXTRA_SPACES = re.compile(r'\s{2,}')
-RX_JUNK_TITLE_ARTIST = re.compile(
-    r'\s*\('
-    r'(official|video|audio|lyric|lyrics|visualizer|live|acoustic|cover|remix|edit|feat|ft\.?|with|explicit|clean|radio|album|version|deluxe|remastered|original|mix|extended|instrumental)'
-    r'\)\s*',
-    re.I,
-)
-RX_SPLIT_WORDS = re.compile(r"([\w'-]+)")
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Small helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-
-
-
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Genius fetch  (relaxed filters + raw-query fallback)
-# ─────────────────────────────────────────────────────────────────────────────
-def fetch_lyrics_from_genius(
-    song_title: str, artist: Optional[str] = None
-) -> Optional[Tuple[List[str], Optional[GeniusSongObject]]]:
-    """Return (cleaned_lines, song_object) or None."""
-    if not HAVE_LYRICSGENIUS:
-        return None
-    token = settings.GENIUS_API_TOKEN
-    if not token:
-        log.warning("GENIUS_API_TOKEN not set")
-        return None
-
-    clean_title = clean_search_term(song_title)
-    clean_artist = clean_search_term(artist) if artist else None
-    if not clean_title:
-        log.warning("Title empty after cleaning – abort Genius search")
-        return None
-
-    genius = lyricsgenius.Genius(
-        token,
-        timeout=15,
-        retries=2,
-        verbose=False,
-        remove_section_headers=True,
-        skip_non_songs=False,
-        excluded_terms=[],
-        response_format='plain',
-    )
-
-    song: Optional[GeniusSongObject] = None
-    try:
-        song = genius.search_song(clean_title, artist=clean_artist) if clean_artist else genius.search_song(clean_title)
-    except Exception as exc:
-        log.error("Genius cleaned search failed: %s – %s", type(exc).__name__, exc)
-
-    if song is None:
-        raw_query = f"{artist or ''} {song_title}".strip()
-        log.info("Fallback Genius search '%s'", raw_query)
-        try:
-            hits = genius.search_songs(raw_query, per_page=1, page=1)
-            if hits and hits.get('hits'):
-                song = genius.song(hits['hits'][0]['result']['id'])
-        except Exception as exc:
-            log.error("Genius fallback search failed: %s – %s", type(exc).__name__, exc)
-
-    if song is None:
-        log.warning("No Genius result for '%s' / '%s'", song_title, artist)
-        return None
-
-    if not getattr(song, 'lyrics', None):
-        log.warning("Genius object has no lyrics text")
-        return ([], song)
-
-    raw_lines = [ln.strip() for ln in song.lyrics.split('\n')]
-    # drop title duplication
-    if raw_lines and normalize_text(raw_lines[0]) == normalize_text(clean_title):
-        raw_lines = raw_lines[1:]
-
-    junk_rx = [
-        re.compile(r'^\d+\s*contributors?$', re.I),
-        re.compile(r'^\s*lyrics for .* by .*$', re.I),
-        re.compile(r'you might also like', re.I),
-        re.compile(r'^\s*get tickets? to see', re.I),
-        re.compile(r'^(source:|see .* live!)', re.I),
-        re.compile(r'\d*embed\s*$', re.I),
-        re.compile(r'\d+[kK]?\s*Embed$', re.I),
-        re.compile(r'pyong\b', re.I),
-    ]
-
-    cleaned: List[str] = []
-    for ln in raw_lines:
-        cl = clean_lyric_line(ln)
-        if not cl:
-            continue
-        if RX_ONLY_PUNCT.match(cl):
-            continue
-        if any(r.search(ln) for r in junk_rx) or any(r.search(cl) for r in junk_rx):
-            continue
-        cleaned.append(cl)
-
-    if not cleaned:
-        log.info("Cleaning removed everything – keeping raw lines (%d)", len(raw_lines))
-        cleaned = [ln for ln in raw_lines if ln]
-
-    return (cleaned, song)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Alignment helpers (unchanged – same logic as ранее)
-# ─────────────────────────────────────────────────────────────────────────────
-# … полный код остальных функций оставьте без изменений …
-
-# File: backend/lyrics_processing.py
-# Genius search → clean text  •  alignment helpers (осталось без изменений ниже).
-
-import re, difflib, logging, unicodedata
-from typing import Optional, List, Tuple, Any
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Optional speed-ups
-# ─────────────────────────────────────────────────────────────────────────────
-try:
-    import rapidfuzz.fuzz as fuzz
-    import rapidfuzz.process as process
-    USE_RAPIDFUZZ = True
-    logging.getLogger(__name__).info("rapidfuzz active")
-except ImportError:
-    USE_RAPIDFUZZ = False
-    logging.getLogger(__name__).warning("rapidfuzz not found – using difflib")
-
-# Genius
-try:
-    import lyricsgenius
-    from lyricsgenius.song import Song as GeniusSongObject
-    HAVE_LYRICSGENIUS = True
-except (ImportError, AttributeError):
-    lyricsgenius = None
-    GeniusSongObject = Any      # type: ignore
-    HAVE_LYRICSGENIUS = False
-    logging.getLogger(__name__).warning("lyricsgenius missing – Genius disabled")
-
-from config import settings
-log = logging.getLogger(__name__)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Regex helpers / constants
-# ─────────────────────────────────────────────────────────────────────────────
-LYRICS_ALIGNMENT_THRESHOLD = settings.LYRICS_ALIGNMENT_THRESHOLD
-WORD_MATCH_THRESHOLD = 75
-
-RX_WS            = re.compile(r'\s+')
-RX_CLEAN         = re.compile(r'\[.*?]|\(.*?]|\{.*?}]|<.*?>|\*.*?\*|^\s*#.*$')
-RX_ONLY_PUNCT    = re.compile(r'^[\W_]+$')
-RX_EXTRA_SPACES  = re.compile(r'\s{2,}')
-RX_JUNK_TA       = re.compile(
-    r'\s*\('
-    r'(official|video|audio|lyric|lyrics|visualizer|live|acoustic|cover|remix|edit|feat|ft\.?|with|explicit|clean|radio|album|version|deluxe|remastered|original|mix|extended|instrumental)'
-    r'\)\s*',
-    re.I,
-)
-RX_SPLIT_WORDS   = re.compile(r"([\w'-]+)")
-
-def normalize_text(t: str) -> str:
-    t = unicodedata.normalize('NFKC', t).lower()
-    t = re.sub(r"[^\w\s'-]+", '', t)
-    return RX_WS.sub(' ', t).strip()
-
-def clean_lyric_line(l: str) -> str:
-    return RX_WS.sub(' ', RX_CLEAN.sub('', l)).strip() if l else ''
-
-def split_words(t: str) -> List[str]:
-    return [w for w in RX_SPLIT_WORDS.findall(t) if w]
-
-def clean_search_term(term: str) -> str:
-    if not term: return ''
-    term = RX_JUNK_TA.sub(' ', term)
-    term = RX_CLEAN.sub('', term)
-    return RX_EXTRA_SPACES.sub(' ', term).strip(" .,!?;:\"")
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Genius helpers
-# ─────────────────────────────────────────────────────────────────────────────
-def _iter_hits(genius, title: str, artist: Optional[str]) -> List['lyricsgenius.song.Song']:
-    """Return up to 5 Song objects for further filtering."""
-    # 1) cleaned query
-    hits: List[GeniusSongObject] = []
-    try:
-        song = genius.search_song(title, artist=artist) if artist else genius.search_song(title)
-        if song: hits.append(song)
-    except Exception as exc:
-        log.debug("cleaned search error: %s", exc)
-
-    # 2) raw query
-    raw_q = f"{artist or ''} {title}".strip()
-    try:
-        res = genius.search_songs(raw_q, per_page=5, page=1)
-        for h in (res.get('hits') if res else [])[:5]:
-            sid = h['result']['id']
-            try:
-                s = genius.song(sid)
-                if s: hits.append(s)
-            except Exception:  # noqa: BLE001
-                pass
-    except Exception as exc:
-        log.debug("raw search error: %s", exc)
-
-    # deduplicate by id
-    seen = set()
-    uniq: List[GeniusSongObject] = []
-    for s in hits:
-        sid = getattr(s, 'id', None)
-        if sid and sid not in seen:
-            uniq.append(s)
-            seen.add(sid)
-    return uniq[:5]
-
-def _clean_lines(raw_lines: List[str], cleaned_title: str) -> List[str]:
-    if raw_lines and normalize_text(raw_lines[0]) == normalize_text(cleaned_title):
-        raw_lines = raw_lines[1:]
-
-    junk_rx = [
-        re.compile(r'^\d+\s*contributors?$', re.I),
-        re.compile(r'^\s*lyrics for .* by .*$', re.I),
-        re.compile(r'you might also like', re.I),
-        re.compile(r'^\s*get tickets? to see', re.I),
-        re.compile(r'^(source:|see .* live!)', re.I),
-        re.compile(r'\d*embed\s*$', re.I),
-        re.compile(r'\d+[kK]?\s*Embed$', re.I),
-        re.compile(r'pyong\b', re.I),
-    ]
-
-    cleaned: List[str] = []
-    for ln in raw_lines:
-        cl = clean_lyric_line(ln)
-        if not cl or RX_ONLY_PUNCT.match(cl):
-            continue
-        if any(r.search(ln) for r in junk_rx) or any(r.search(cl) for r in junk_rx):
-            continue
-        cleaned.append(cl)
-    return cleaned
-
-def fetch_genius_candidates(title: str, artist: Optional[str] = None, max_candidates: int = 3
-) -> List[Tuple[List[str], GeniusSongObject]]:
-    """Return up to `max_candidates` tuples (clean_lines, song_obj)."""
-    if not HAVE_LYRICSGENIUS or not settings.GENIUS_API_TOKEN:
-        log.warning("Genius disabled or token missing")
-        return []
-
-    genius = lyricsgenius.Genius(
-        settings.GENIUS_API_TOKEN,
-        timeout=15,
-        retries=2,
-        verbose=False,
-        remove_section_headers=True,
-        skip_non_songs=False,
-        excluded_terms=[],
-        response_format='plain',
-    )
-
-    cleaned_title = clean_search_term(title)
-    cleaned_artist = clean_search_term(artist) if artist else None
-
-    candidates: List[Tuple[List[str], GeniusSongObject]] = []
-    for song in _iter_hits(genius, cleaned_title, cleaned_artist):
-        if not getattr(song, 'lyrics', None):
-            continue
-        lines = _clean_lines([ln.strip() for ln in song.lyrics.split('\n')], cleaned_title)
-        # keep even empty lines – фронтенд покажет, но не выберет автоматически
-        candidates.append((lines, song))
-        if len(candidates) >= max_candidates:
-            break
-
-    return candidates

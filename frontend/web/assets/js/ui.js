@@ -1,335 +1,247 @@
 // File: frontend/web/assets/js/ui.js
-// Manages UI updates, state resets, progress display, and interactions.
-// UPDATED (v5): Added hideOptionsAndGenius helper function.
+import * as DOM from './dom.js'
+import { BASE_TITLE, DEFAULT_FAVICON } from './config.js'
 
-import * as DOM from './dom.js';
-import {BASE_TITLE, DEFAULT_FAVICON} from './config.js';
+console.log("[UI] Module loaded.")
 
-console.log("[UI] Module loaded.");
-
-// --- Helper Functions ---
-
-
-/**
- * Updates the main input field and video preview area when a suggestion is selected.
- */
 export function updateInputWithSuggestion(item) {
-    console.log("[UI] Updating input with suggestion:", item);
-    if (!item) return;
-
-    if (DOM.youtubeInput) {
-        DOM.youtubeInput.value = item.url || "";
-    } else {
-        console.warn("[UI] YouTube input element not found.");
-    }
-
-    if (DOM.chosenVideoTitleDiv) {
-        DOM.chosenVideoTitleDiv.textContent = item.title ? `Selected: ${item.title}` : "";
-    } else {
-        console.warn("[UI] Chosen video title element not found.");
-    }
-
+    if (!item) return
+    if (DOM.youtubeInput) DOM.youtubeInput.value = item.url || ""
+    if (DOM.chosenVideoTitleDiv) DOM.chosenVideoTitleDiv.textContent = item.title ? `Selected: ${item.title}` : ""
     if (DOM.videoPreview) {
         if (item.thumbnail) {
-            DOM.videoPreview.src = item.thumbnail;
-            DOM.videoPreview.alt = `Thumbnail for ${item.title}`;
-            DOM.videoPreview.style.display = "block";
-            // Trigger animation after display block
+            DOM.videoPreview.src = item.thumbnail
+            DOM.videoPreview.alt = `Thumbnail for ${item.title}`
+            DOM.videoPreview.style.display = "block"
             requestAnimationFrame(() => {
-                DOM.videoPreview.style.opacity = '1';
-                DOM.videoPreview.style.maxHeight = '90px';
-            });
+                DOM.videoPreview.style.opacity = '1'
+                DOM.videoPreview.style.maxHeight = '90px'
+            })
         } else {
-            clearPreview();
+            clearPreview(true)
         }
-    } else {
-        console.warn("[UI] Video preview image element not found.");
     }
-
-    // Hide Genius related things when a new item is selected (before genius fetch)
-    const lyricsPanel = document.getElementById("lyrics-panel");
-    const toggleBtn = document.getElementById("lyrics-toggle-btn");
-    const textArea = DOM.geniusSelectedText;
-    if (lyricsPanel) lyricsPanel.classList.add("hidden");
+    const lyricsPanel = document.getElementById("lyrics-panel")
+    const toggleBtn = document.getElementById("lyrics-toggle-btn")
+    const textArea = DOM.geniusSelectedText
+    if (lyricsPanel) lyricsPanel.classList.add("hidden")
     if (toggleBtn) {
-        toggleBtn.setAttribute("aria-expanded", "false");
-        toggleBtn.classList.remove('expanded');
+        toggleBtn.setAttribute("aria-expanded", "false")
+        toggleBtn.classList.remove('expanded')
     }
-    if (textArea) textArea.value = "";
-    window.selectedGeniusLyrics = null;
-    if (DOM.geniusLyricsList) DOM.geniusLyricsList.innerHTML = "";
-    // Don't hide the main genius container here, let fetchAndDisplayGeniusCandidates handle it
+    if (textArea) textArea.value = ""
+    window.selectedGeniusLyrics = null
+    if (DOM.geniusLyricsList) DOM.geniusLyricsList.innerHTML = ""
 }
 
-/**
- * Clears the video preview image and the chosen title text.
- */
-export function clearPreview() {
-    if (DOM.chosenVideoTitleDiv) {
-        DOM.chosenVideoTitleDiv.textContent = "";
-    }
+export function clearPreview(forceClear = false) {
+    if (DOM.processBtn?.disabled && !forceClear) return
+    if (DOM.chosenVideoTitleDiv) DOM.chosenVideoTitleDiv.textContent = ""
     if (DOM.videoPreview) {
-        DOM.videoPreview.style.opacity = '0';
-        DOM.videoPreview.style.maxHeight = '0';
+        DOM.videoPreview.style.opacity = '0'
+        DOM.videoPreview.style.maxHeight = '0'
         setTimeout(() => {
             if (DOM.videoPreview && parseFloat(DOM.videoPreview.style.opacity || 0) === 0) {
-                DOM.videoPreview.style.display = "none";
-                DOM.videoPreview.src = "";
-                DOM.videoPreview.alt = "";
+                DOM.videoPreview.style.display = "none"
+                DOM.videoPreview.src = ""
+                DOM.videoPreview.alt = ""
             }
-        }, 300);
+        }, 300)
     }
 }
 
-/**
- * Resets the document title and favicon to their default states.
- */
 export function resetTitleAndFavicon() {
-    document.title = BASE_TITLE;
-    if (DOM.faviconElement) {
-        DOM.faviconElement.href = DEFAULT_FAVICON;
-    } else {
-        console.warn("[UI] Favicon element (#favicon) not found.");
-    }
+    document.title = BASE_TITLE
+    if (DOM.faviconElement) DOM.faviconElement.href = DEFAULT_FAVICON
 }
 
-/**
- * Toggles the visibility and disabled state of subtitle/lyrics options
- */
 export function toggleSubOptionsVisibility() {
-    if (!DOM.generateSubtitlesCheckbox) {
-        console.warn("[UI] 'Add Lyrics' checkbox (#generate-subtitles-checkbox) not found.");
-        return;
-    }
-    const enableLyrics = DOM.generateSubtitlesCheckbox.checked;
-    console.log(`[UI] Toggling Subtitle Options Visibility. Lyrics Enabled: ${enableLyrics}`);
-
-    if (DOM.languageSelect) DOM.languageSelect.disabled = !enableLyrics;
-    if (DOM.subtitlePositionSelect) DOM.subtitlePositionSelect.disabled = !enableLyrics;
-    if (DOM.finalSubtitleSizeSelect) DOM.finalSubtitleSizeSelect.disabled = !enableLyrics;
-
-    if (DOM.subtitleOptionsContainer) {
-        const generalOptionsGroup = DOM.subtitleOptionsContainer.querySelector(':scope > .options-group:not(#genius-lyrics-container)');
-        if (generalOptionsGroup) {
-            const controlsToFade = generalOptionsGroup.querySelectorAll('.option-item:not(.checkbox-item)');
-            controlsToFade.forEach(item => {
-                item.style.opacity = enableLyrics ? '1' : '0.5';
-                item.style.pointerEvents = enableLyrics ? 'auto' : 'none';
-            });
-            const mainCheckboxItem = generalOptionsGroup.querySelector('.option-item.checkbox-item');
-            if (mainCheckboxItem) {
-                mainCheckboxItem.style.opacity = '1';
-                mainCheckboxItem.style.pointerEvents = 'auto';
-            }
+    if (!DOM.generateSubtitlesCheckbox) return
+    const enable = DOM.generateSubtitlesCheckbox.checked
+    if (DOM.languageSelect) DOM.languageSelect.disabled = !enable
+    if (DOM.subtitlePositionSelect) DOM.subtitlePositionSelect.disabled = !enable
+    if (DOM.finalSubtitleSizeSelect) DOM.finalSubtitleSizeSelect.disabled = !enable
+    const group = DOM.subtitleOptionsContainer?.querySelector(':scope > .options-group:not(#genius-lyrics-container)')
+    if (group) {
+        const controls = group.querySelectorAll('.option-item.lyrics-option')
+        controls.forEach(i => {
+            i.style.opacity = enable ? '1' : '0.5'
+            i.style.pointerEvents = enable ? 'auto' : 'none'
+        })
+        const main = group.querySelector('.option-item.checkbox-item')
+        if (main) {
+            main.style.opacity = '1'
+            main.style.pointerEvents = 'auto'
         }
     }
-
-    if (DOM.geniusLyricsContainer && DOM.subtitleOptionsContainer) {
-        const optionsAreVisible = DOM.subtitleOptionsContainer.style.display !== 'none' && parseFloat(DOM.subtitleOptionsContainer.style.opacity || 0) > 0;
-        const shouldShowGenius = enableLyrics && optionsAreVisible;
-        console.log(`[UI] Should show Genius section? ${shouldShowGenius} (EnableLyrics: ${enableLyrics}, OptionsVisible: ${optionsAreVisible})`);
-
-        if (shouldShowGenius) {
-            DOM.geniusLyricsContainer.style.display = 'flex';
-            requestAnimationFrame(() => {
-                DOM.geniusLyricsContainer.style.opacity = '1';
-                DOM.geniusLyricsContainer.style.maxHeight = '700px';
-            });
-        } else {
-            // Hide genius section if lyrics disabled or options hidden
-            hideOptionsAndGenius(); // Use the helper to ensure cleanup
-        }
-    }
+    if (!DOM.geniusLyricsContainer || !DOM.subtitleOptionsContainer) return
+    const optsVisible = DOM.subtitleOptionsContainer.style.display !== 'none' && parseFloat(DOM.subtitleOptionsContainer.style.opacity || 0) > 0
+    const show = enable && optsVisible
+    if (show) {
+        DOM.geniusLyricsContainer.style.display = 'flex'
+        requestAnimationFrame(() => {
+            DOM.geniusLyricsContainer.style.opacity = '1'
+            DOM.geniusLyricsContainer.style.maxHeight = '700px'
+        })
+    } else hideGeniusSectionOnly()
 }
 
+function hideGeniusSectionOnly() {
+    if (!DOM.geniusLyricsContainer) return
+    DOM.geniusLyricsContainer.style.opacity = '0'
+    DOM.geniusLyricsContainer.style.maxHeight = '0'
+    setTimeout(() => {
+        if (DOM.geniusLyricsContainer && parseFloat(DOM.geniusLyricsContainer.style.opacity || 0) === 0)
+            DOM.geniusLyricsContainer.style.display = 'none'
+    }, 400)
+}
 
-/**
- * Displays a status message to the user.
- */
 export function showStatus(message, isError = false) {
     if (DOM.statusMessage) {
-        console.log(`[UI] Showing status (Error: ${isError}): ${message}`);
-        DOM.statusMessage.textContent = message;
-        DOM.statusMessage.className = isError ? 'error' : 'success';
-        DOM.statusMessage.setAttribute('role', isError ? 'alert' : 'status');
-        DOM.statusMessage.style.display = 'block';
+        DOM.statusMessage.textContent = message
+        DOM.statusMessage.className = isError ? 'error' : 'success'
+        DOM.statusMessage.setAttribute('role', isError ? 'alert' : 'status')
+        DOM.statusMessage.style.display = 'block'
         requestAnimationFrame(() => {
-            DOM.statusMessage.style.opacity = '1';
-            DOM.statusMessage.style.maxHeight = '100px';
-        });
-
-    } else {
-        console.warn("[UI] Status message element (#status-message) not found. Message:", message);
-        alert(`${isError ? 'Error: ' : ''}${message}`);
-    }
+            DOM.statusMessage.style.opacity = '1'
+            DOM.statusMessage.style.maxHeight = '100px'
+        })
+    } else alert(`${isError ? 'Error: ' : ''}${message}`)
 }
 
-/**
- * Clears the status message area.
- */
 export function clearStatus() {
-    if (DOM.statusMessage && DOM.statusMessage.style.display !== 'none') {
-        // console.log("[UI] Clearing status message."); // Less verbose
-        DOM.statusMessage.style.opacity = '0';
-        DOM.statusMessage.style.maxHeight = '0';
-        const clearContent = () => {
-            if (DOM.statusMessage) {
-                DOM.statusMessage.textContent = '';
-                DOM.statusMessage.className = '';
-                DOM.statusMessage.removeAttribute('role');
-                DOM.statusMessage.style.display = 'none';
-                DOM.statusMessage.removeEventListener('transitionend', clearContent);
-            }
-        };
-        if (getComputedStyle(DOM.statusMessage).transitionProperty !== 'none') {
-            DOM.statusMessage.addEventListener('transitionend', clearContent, {once: true});
-        } else {
-            setTimeout(clearContent, 300);
-        }
+    if (!DOM.statusMessage || DOM.statusMessage.style.display === 'none') return
+    DOM.statusMessage.style.opacity = '0'
+    DOM.statusMessage.style.maxHeight = '0'
+    const clear = () => {
+        if (!DOM.statusMessage) return
+        DOM.statusMessage.textContent = ''
+        DOM.statusMessage.className = ''
+        DOM.statusMessage.removeAttribute('role')
+        DOM.statusMessage.style.display = 'none'
+        DOM.statusMessage.removeEventListener('transitionend', clear)
     }
+    const style = getComputedStyle(DOM.statusMessage)
+    if (style.transitionProperty !== 'none' && (style.transitionDuration !== '0s' || style.transitionDelay !== '0s'))
+        DOM.statusMessage.addEventListener('transitionend', clear, { once: true })
+    else setTimeout(clear, 0)
 }
 
-/**
- * Resets the entire UI to its initial, default state.
- */
-export function resetUI() {
-    console.log("[UI] Resetting UI to initial state.");
-
-    if (DOM.youtubeInput) DOM.youtubeInput.value = "";
-    clearPreview();
-    clearStatus();
-
-    // Reset Progress Display
+export function resetUI(keepPreviewAndTitle = false) {
+    if (!keepPreviewAndTitle) {
+        if (DOM.youtubeInput) DOM.youtubeInput.value = ""
+        clearPreview(true)
+    }
+    clearStatus()
     if (DOM.progressDisplay) {
-        DOM.progressDisplay.style.opacity = '0';
-        DOM.progressDisplay.style.maxHeight = '0';
+        DOM.progressDisplay.style.opacity = '0'
+        DOM.progressDisplay.style.maxHeight = '0'
         setTimeout(() => {
-            if (DOM.progressDisplay && DOM.progressDisplay.style.opacity === '0') DOM.progressDisplay.style.display = "none";
-        }, 400);
+            if (DOM.progressDisplay && parseFloat(DOM.progressDisplay.style.opacity || 0) === 0)
+                DOM.progressDisplay.style.display = "none"
+        }, 400)
     }
     if (DOM.progressBar) {
-        DOM.progressBar.style.width = "0%";
-        DOM.progressBar.classList.remove('error');
-        DOM.progressBar.ariaValueNow = "0";
-        DOM.progressBar.removeAttribute('aria-invalid');
+        DOM.progressBar.style.width = "0%"
+        DOM.progressBar.classList.remove('error')
+        DOM.progressBar.ariaValueNow = "0"
+        DOM.progressBar.removeAttribute('aria-invalid')
     }
-    if (DOM.progressText) DOM.progressText.textContent = "";
-    if (DOM.progressTiming) DOM.progressTiming.textContent = "";
-    if (DOM.progressStepsContainer) DOM.progressStepsContainer.innerHTML = "";
-    const cancelBtn = document.getElementById("cancel-job-btn");
-    if (cancelBtn) cancelBtn.style.display = 'none';
-
-    // Reset Results Area
+    if (DOM.progressText) DOM.progressText.textContent = ""
+    if (DOM.progressTiming) DOM.progressTiming.textContent = ""
+    if (DOM.progressStepsContainer) DOM.progressStepsContainer.innerHTML = ""
+    const cancelBtn = document.getElementById("cancel-job-btn")
+    if (cancelBtn) cancelBtn.style.display = 'none'
     if (DOM.resultsArea) {
-        DOM.resultsArea.style.opacity = '0';
-        DOM.resultsArea.style.maxHeight = '0';
+        DOM.resultsArea.style.opacity = '0'
+        DOM.resultsArea.style.maxHeight = '0'
         setTimeout(() => {
-            if (DOM.resultsArea && DOM.resultsArea.style.opacity === '0') DOM.resultsArea.style.display = "none";
-        }, 500);
+            if (DOM.resultsArea && parseFloat(DOM.resultsArea.style.opacity || 0) === 0)
+                DOM.resultsArea.style.display = "none"
+        }, 500)
     }
     if (DOM.karaokeVideo) {
-        DOM.karaokeVideo.removeAttribute("src");
-        DOM.karaokeVideo.load();
+        DOM.karaokeVideo.removeAttribute("src")
+        try { DOM.karaokeVideo.load() } catch {}
     }
-    const videoTitleEl = document.getElementById("video-title");
-    if (videoTitleEl) videoTitleEl.textContent = "Karaoke Video";
-
+    const videoTitleEl = document.getElementById("video-title")
+    if (videoTitleEl) videoTitleEl.textContent = "Karaoke Video"
     if (DOM.downloadBtn) {
-        DOM.downloadBtn.style.display = "none";
-        DOM.downloadBtn.href = "#";
+        DOM.downloadBtn.style.display = "none"
+        DOM.downloadBtn.href = "#"
     }
     if (DOM.shareBtn) {
-        DOM.shareBtn.style.display = "none";
-        DOM.shareBtn.onclick = null;
-        DOM.shareBtn.disabled = false;
-        DOM.shareBtn.innerHTML = `<span class="button-icon" aria-hidden="true">🔗</span> Copy Link`;
+        DOM.shareBtn.style.display = "none"
+        DOM.shareBtn.onclick = null
+        DOM.shareBtn.disabled = false
+        DOM.shareBtn.innerHTML = `<span class="button-icon" aria-hidden="true">🔗</span> Copy Link`
     }
-
-    if (DOM.processBtn) DOM.processBtn.disabled = false;
-
-    hideSuggestionDropdown();
-    hideSuggestionSpinner();
-
-    // Reset and hide options sections using the helper
-    hideOptionsAndGenius();
-
-    // Reset option defaults that might have been changed
-    if (DOM.generateSubtitlesCheckbox) DOM.generateSubtitlesCheckbox.checked = true;
-    if (DOM.languageSelect) DOM.languageSelect.value = 'auto';
-    if (DOM.subtitlePositionSelect) DOM.subtitlePositionSelect.value = 'bottom';
-    if (DOM.finalSubtitleSizeSelect) DOM.finalSubtitleSizeSelect.value = '30'; // Default size
-    // Call toggleSubOptionsVisibility to ensure correct initial state (disabled/enabled)
-    toggleSubOptionsVisibility();
-
-    resetTitleAndFavicon();
-
-    // Reset Stems Section
+    if (DOM.processBtn) DOM.processBtn.disabled = false
+    hideSuggestionDropdown()
+    hideSuggestionSpinner()
+    if (DOM.languageSelect) DOM.languageSelect.value = 'auto'
+    if (DOM.subtitlePositionSelect) DOM.subtitlePositionSelect.value = 'bottom'
+    if (DOM.finalSubtitleSizeSelect) DOM.finalSubtitleSizeSelect.value = '30'
+    if (!keepPreviewAndTitle) resetTitleAndFavicon()
     if (DOM.stemsSection) {
-        DOM.stemsSection.style.opacity = '0';
-        DOM.stemsSection.style.maxHeight = '0';
+        DOM.stemsSection.style.opacity = '0'
+        DOM.stemsSection.style.maxHeight = '0'
         setTimeout(() => {
-            if (DOM.stemsSection && DOM.stemsSection.style.opacity === '0') DOM.stemsSection.style.display = 'none';
-        }, 500);
+            if (DOM.stemsSection && parseFloat(DOM.stemsSection.style.opacity || 0) === 0)
+                DOM.stemsSection.style.display = 'none'
+        }, 500)
     }
-    import('./stems.js').then(Stems => Stems.destroyStemPlayers());
+    if (!keepPreviewAndTitle || (DOM.stemsSection && DOM.stemsSection.style.display === 'none'))
+        import('./stems.js').then(S => S.destroyStemPlayers()).catch(err => console.error("Error destroying stems", err))
 }
 
-/**
- * Configures the UI elements to show that processing is starting.
- */
 export function showProcessingUI() {
-    if (DOM.processBtn) DOM.processBtn.disabled = true;
-    clearStatus();
-
+    if (DOM.processBtn) DOM.processBtn.disabled = true
+    clearStatus()
     if (DOM.progressDisplay) {
-        DOM.progressDisplay.style.display = "block";
+        DOM.progressDisplay.style.display = "block"
         requestAnimationFrame(() => {
-            DOM.progressDisplay.style.opacity = '1';
-            DOM.progressDisplay.style.maxHeight = '500px';
-        });
-    } else {
-        console.warn("[UI] Progress display element not found.");
+            DOM.progressDisplay.style.opacity = '1'
+            DOM.progressDisplay.style.maxHeight = '500px'
+        })
     }
-    const cancelBtn = document.getElementById("cancel-job-btn");
+    const cancelBtn = document.getElementById("cancel-job-btn")
     if (cancelBtn) {
-        cancelBtn.style.display = 'inline-flex';
-        cancelBtn.disabled = false;
-        cancelBtn.innerHTML = `<span class="button-icon">✖️</span> Cancel Job`;
+        cancelBtn.style.display = 'inline-flex'
+        cancelBtn.disabled = false
+        cancelBtn.innerHTML = `<span class="button-icon">✖️</span> Cancel Job`
     }
-
     if (DOM.progressBar) {
-        DOM.progressBar.style.width = "0%";
-        DOM.progressBar.classList.remove('error');
-        DOM.progressBar.ariaValueNow = "0";
-        DOM.progressBar.removeAttribute('aria-invalid');
+        DOM.progressBar.style.width = "0%"
+        DOM.progressBar.classList.remove('error')
+        DOM.progressBar.ariaValueNow = "0"
+        DOM.progressBar.removeAttribute('aria-invalid')
     }
-    if (DOM.progressText) DOM.progressText.textContent = "0% - Initializing...";
-    if (DOM.progressTiming) DOM.progressTiming.textContent = "Elapsed: 0s";
-    if (DOM.progressStepsContainer) DOM.progressStepsContainer.innerHTML = "";
-
+    if (DOM.progressText) DOM.progressText.textContent = "0% - Initializing..."
+    if (DOM.progressTiming) DOM.progressTiming.textContent = "Elapsed: 0s"
+    if (DOM.progressStepsContainer) DOM.progressStepsContainer.innerHTML = ""
     if (DOM.resultsArea) {
-        DOM.resultsArea.style.opacity = '0';
-        DOM.resultsArea.style.maxHeight = '0';
+        DOM.resultsArea.style.opacity = '0'
+        DOM.resultsArea.style.maxHeight = '0'
         setTimeout(() => {
-            if (DOM.resultsArea && DOM.resultsArea.style.opacity === '0') DOM.resultsArea.style.display = 'none';
-        }, 500);
+            if (DOM.resultsArea && parseFloat(DOM.resultsArea.style.opacity || 0) === 0)
+                DOM.resultsArea.style.display = 'none'
+        }, 500)
     }
     if (DOM.stemsSection) {
-        DOM.stemsSection.style.opacity = '0';
-        DOM.stemsSection.style.maxHeight = '0';
+        DOM.stemsSection.style.opacity = '0'
+        DOM.stemsSection.style.maxHeight = '0'
         setTimeout(() => {
-            if (DOM.stemsSection && DOM.stemsSection.style.opacity === '0') DOM.stemsSection.style.display = 'none';
-        }, 500);
+            if (DOM.stemsSection && parseFloat(DOM.stemsSection.style.opacity || 0) === 0)
+                DOM.stemsSection.style.display = 'none'
+        }, 500)
     }
-    import('./stems.js').then(Stems => Stems.destroyStemPlayers());
+    import('./stems.js').then(S => S.destroyStemPlayers()).catch(err => console.error("Error destroying stems", err))
 }
 
-/**
- * Updates the progress bar, text, timing, and step log based on WebSocket data.
- */
+
 export function updateProgressUI(data, jobStartTime) {
     if (DOM.progressDisplay && DOM.progressDisplay.style.display === 'none') {
-        console.warn("[UI] Received progress update but progress display is hidden. Making it visible.");
         DOM.progressDisplay.style.display = "block";
         requestAnimationFrame(() => {
             DOM.progressDisplay.style.opacity = '1';
@@ -342,7 +254,7 @@ export function updateProgressUI(data, jobStartTime) {
     const newProgress = Math.min(Math.max(0, parseInt(data.progress, 10) || 0), 100);
     const message = data.message || "";
     const isStepStart = !!data.is_step_start;
-    const isError = /error|fail|cancel|ошибка|сбой|отмен/i.test(message);
+    const isError = /error|fail|cancel|ошибка|сбой|отмен/i.test(message.toLowerCase());
 
     if (DOM.progressBar) {
         DOM.progressBar.style.width = `${newProgress}%`;
@@ -383,7 +295,7 @@ export function updateProgressUI(data, jobStartTime) {
     if (DOM.progressTiming && jobStartTime) {
         const elapsedSec = Math.round((Date.now() - jobStartTime) / 1000);
         let estimate = "";
-        if (newProgress > 0 && newProgress < 100) {
+        if (newProgress > 0 && newProgress < 100 && !isError) {
             const estimatedTotalSec = (elapsedSec / newProgress) * 100;
             const estimatedRemainingSec = Math.max(0, Math.round(estimatedTotalSec - elapsedSec));
             estimate = `, Est. remaining: ~${estimatedRemainingSec}s`;
@@ -401,9 +313,6 @@ export function updateProgressUI(data, jobStartTime) {
     }
 }
 
-/**
- * Displays the final results (video, download/share buttons).
- */
 export function displayResults(result) {
     console.log("[UI] Displaying final results:", result);
     if (!result || typeof result !== 'object') {
@@ -412,9 +321,7 @@ export function displayResults(result) {
         if (DOM.progressDisplay) {
             DOM.progressDisplay.style.opacity = '0';
             DOM.progressDisplay.style.maxHeight = '0';
-            setTimeout(() => {
-                if (DOM.progressDisplay && DOM.progressDisplay.style.opacity === '0') DOM.progressDisplay.style.display = 'none';
-            }, 300);
+            setTimeout(() => { if (DOM.progressDisplay && parseFloat(DOM.progressDisplay.style.opacity || 0) === 0) DOM.progressDisplay.style.display = 'none'; }, 300);
         }
         return;
     }
@@ -423,7 +330,7 @@ export function displayResults(result) {
         DOM.progressDisplay.style.opacity = '0';
         DOM.progressDisplay.style.maxHeight = '0';
         setTimeout(() => {
-            if (DOM.progressDisplay && DOM.progressDisplay.style.opacity === '0') DOM.progressDisplay.style.display = 'none';
+            if (DOM.progressDisplay && parseFloat(DOM.progressDisplay.style.opacity || 0) === 0) DOM.progressDisplay.style.display = 'none';
         }, 300);
     }
 
@@ -451,6 +358,7 @@ export function displayResults(result) {
         }
         const fullVideoUrl = new URL(videoUrl, window.location.origin).href;
         console.log("[UI] Setting video source to:", fullVideoUrl);
+
         DOM.karaokeVideo.src = fullVideoUrl;
         DOM.karaokeVideo.load();
 
@@ -475,13 +383,12 @@ export function displayResults(result) {
     }
 
     if (!DOM.statusMessage || !DOM.statusMessage.classList.contains('error')) {
-        showStatus(`Success! Karaoke generated for: ${result.title || 'your video'}.`);
+         showStatus(`Success! Karaoke generated for: ${result.title || 'your video'}.`);
     }
     if (DOM.processBtn) DOM.processBtn.disabled = false;
     resetTitleAndFavicon();
 }
 
-// copyToClipboard remains the same
 function copyToClipboard(textToCopy, buttonElement) {
     if (!navigator.clipboard) {
         console.warn("[UI] Clipboard API not available.");
@@ -491,15 +398,18 @@ function copyToClipboard(textToCopy, buttonElement) {
     navigator.clipboard.writeText(textToCopy).then(() => {
         console.log("[UI] Link copied to clipboard:", textToCopy);
         if (!buttonElement || !document.body.contains(buttonElement)) return;
+
         const originalHTML = buttonElement.innerHTML;
         const originalTitle = buttonElement.title;
         buttonElement.disabled = true;
         buttonElement.innerHTML = `<span class="button-icon" aria-hidden="true">✅</span> Copied!`;
         buttonElement.title = "Copied!";
+
         const existingTimeout = buttonElement.dataset.copyTimeout;
         if (existingTimeout) {
             clearTimeout(parseInt(existingTimeout, 10));
         }
+
         const timeoutId = setTimeout(() => {
             if (document.body.contains(buttonElement) && buttonElement.innerHTML.includes('✅')) {
                 buttonElement.innerHTML = originalHTML;
@@ -509,32 +419,13 @@ function copyToClipboard(textToCopy, buttonElement) {
             }
         }, 2500);
         buttonElement.dataset.copyTimeout = timeoutId.toString();
+
     }).catch(err => {
         console.error("[UI] Failed to copy link to clipboard:", err);
         alert(`Could not copy link. Please copy manually:\n${textToCopy}`);
     });
 }
 
-
-// File: frontend/web/assets/js/ui.js
-// Manages UI updates, state resets, progress display and interactions.
-
-
-console.log('[UI] module loaded');
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Internal state – used only inside this module
-// ─────────────────────────────────────────────────────────────────────────────
-/**
- * Timeout id for the deferred clean-up launched by hideSuggestionDropdown().
- * We cancel it whenever the dropdown is rendered again; that prevents the
- * “open → instant close” flicker that happened on first keystrokes.
- */
-let dropdownCleanupTmr = null;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Helper – hide both the subtitle-options block and the Genius block
-// ─────────────────────────────────────────────────────────────────────────────
 export function hideOptionsAndGenius() {
     if (DOM.subtitleOptionsContainer) {
         DOM.subtitleOptionsContainer.style.opacity = '0';
@@ -546,26 +437,12 @@ export function hideOptionsAndGenius() {
             ) {
                 DOM.subtitleOptionsContainer.style.display = 'none';
             }
-        }, 400); // must match CSS transition-duration
-    }
-
-    if (DOM.geniusLyricsContainer) {
-        DOM.geniusLyricsContainer.style.opacity = '0';
-        DOM.geniusLyricsContainer.style.maxHeight = '0';
-        setTimeout(() => {
-            if (
-                DOM.geniusLyricsContainer &&
-                parseFloat(DOM.geniusLyricsContainer.style.opacity || 0) === 0
-            ) {
-                DOM.geniusLyricsContainer.style.display = 'none';
-            }
         }, 400);
     }
+    hideGeniusSectionOnly();
 
-    // reset Genius-specific state
     window.selectedGeniusLyrics = null;
     if (DOM.geniusLyricsList) DOM.geniusLyricsList.innerHTML = '';
-
     const panel = document.getElementById('lyrics-panel');
     const btn = document.getElementById('lyrics-toggle-btn');
     if (panel) panel.classList.add('hidden');
@@ -576,9 +453,6 @@ export function hideOptionsAndGenius() {
     if (DOM.geniusSelectedText) DOM.geniusSelectedText.value = '';
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// One-time UI event wiring
-// ─────────────────────────────────────────────────────────────────────────────
 function setupUIEventListeners() {
     const toggleBtn = document.getElementById('lyrics-toggle-btn');
     const lyricsPanel = document.getElementById('lyrics-panel');
@@ -590,8 +464,6 @@ function setupUIEventListeners() {
             toggleBtn.setAttribute('aria-expanded', String(!isHidden));
             toggleBtn.classList.toggle('expanded', !isHidden);
         });
-
-        // initialise button state
         toggleBtn.setAttribute(
             'aria-expanded',
             String(!lyricsPanel.classList.contains('hidden'))
@@ -604,110 +476,114 @@ function setupUIEventListeners() {
 
     if (fontSizeSelect) {
         fontSizeSelect.addEventListener('change', (ev) => {
-            console.log(
-                `[UI] user selected ${(ev.target).value}px final subtitle size`
-            );
+            const target = ev.target;
+            if (target instanceof HTMLSelectElement) {
+                console.log(
+                    `[UI] User selected ${target.value}px final subtitle size (display only, actual value sent on process).`
+                );
+            }
         });
     }
 }
-
 document.addEventListener('DOMContentLoaded', setupUIEventListeners);
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Suggestion-dropdown helpers  ★ FLICKER FIX HERE ★
-// ─────────────────────────────────────────────────────────────────────────────
-/** Position dropdown directly under the input element. */
+let dropdownCleanupTmr = null;
+
 export function positionSuggestionDropdown() {
     if (!DOM.suggestionDropdownElement || !DOM.youtubeInput) return;
 
-    const r = DOM.youtubeInput.getBoundingClientRect();
-    const dd = DOM.suggestionDropdownElement;
+    const inputRect = DOM.youtubeInput.getBoundingClientRect();
+    const dropdown = DOM.suggestionDropdownElement;
 
-    dd.style.position = 'fixed';
-    dd.style.top = `${r.bottom + window.scrollY + 2}px`;
-    dd.style.left = `${r.left + window.scrollX}px`;
-    dd.style.width = `${r.width}px`;
-    dd.style.zIndex = '1001';
+    dropdown.style.position = 'fixed';
+    dropdown.style.top = `${inputRect.bottom + 2}px`;
+    dropdown.style.left = `${inputRect.left}px`;
+    dropdown.style.width = `${inputRect.width}px`;
+    dropdown.style.zIndex = '1001';
 }
 
-/** Fade-out and then remove the dropdown list. */
 export function hideSuggestionDropdown() {
     if (!DOM.suggestionDropdownElement) return;
-    if (DOM.suggestionDropdownElement.style.visibility === 'hidden') return;
 
-    // stop any previous clean-up still waiting
+    if (DOM.suggestionDropdownElement.style.visibility === 'hidden' &&
+        parseFloat(DOM.suggestionDropdownElement.style.opacity || '0') === 0) {
+        return;
+    }
+
     clearTimeout(dropdownCleanupTmr);
 
-    const dd = DOM.suggestionDropdownElement;
-    dd.style.visibility = 'hidden';
-    dd.style.opacity = '0';
+    const dropdown = DOM.suggestionDropdownElement;
+    dropdown.style.opacity = '0';
+
+    const style = getComputedStyle(dropdown);
+    const transitionDuration = parseFloat(style.transitionDuration) * 1000;
 
     dropdownCleanupTmr = setTimeout(() => {
         if (!DOM.suggestionDropdownElement) return;
-
-        dd.innerHTML = '';
-        dd.removeAttribute('aria-activedescendant');
-
-        if (DOM.youtubeInput) {
-            DOM.youtubeInput.removeAttribute('aria-expanded');
-            DOM.youtubeInput.removeAttribute('aria-activedescendant');
+        if (parseFloat(dropdown.style.opacity || '0') === 0) {
+            dropdown.style.visibility = 'hidden';
+            dropdown.innerHTML = '';
+            if (DOM.youtubeInput) {
+                DOM.youtubeInput.removeAttribute('aria-expanded');
+                DOM.youtubeInput.removeAttribute('aria-activedescendant');
+            }
+            dropdown.removeAttribute('aria-activedescendant');
         }
-    }, 250); // keep in sync with CSS transition
+    }, transitionDuration || 0);
 }
 
-/** Show or hide the tiny spinner inside the dropdown area. */
 export const showSuggestionSpinner = () =>
     DOM.suggestionSpinner && (DOM.suggestionSpinner.style.display = 'block');
 export const hideSuggestionSpinner = () =>
     DOM.suggestionSpinner && (DOM.suggestionSpinner.style.display = 'none');
 
-/**
- * Renders the suggestion dropdown.
- * @param {Array<Object>} suggestions
- * @param {Function}      onSelect
- * @param {Function?}     onItemMouseDown – fired on *mousedown* inside each row
- *                                          so the blur-handler knows we’re still
- *                                          interacting with the dropdown.
- */
 export function renderSuggestionDropdown(
     suggestions,
     onSelect,
     onItemMouseDown = null
 ) {
-    if (!DOM.suggestionDropdownElement || !suggestions.length) {
+    if (!DOM.suggestionDropdownElement || !suggestions || !suggestions.length) {
         hideSuggestionDropdown();
         return;
     }
 
-    clearTimeout(dropdownCleanupTmr);            // cancel pending clean-up
-    const dd = DOM.suggestionDropdownElement;
-    dd.innerHTML = "";
+    clearTimeout(dropdownCleanupTmr);
+
+    const dropdown = DOM.suggestionDropdownElement;
+    dropdown.innerHTML = "";
     positionSuggestionDropdown();
 
-    suggestions.forEach((item, idx) => {
+    suggestions.forEach((item, index) => {
         const row = document.createElement("div");
         row.className = "suggestion-item";
-        row.id        = `s-${idx}`;
-        row.tabIndex  = -1;
+        row.id = `suggestion-item-${index}`;
+        row.tabIndex = -1;
+        row.setAttribute('role', 'option');
+
+        const thumbnailSrc = item.thumbnail
+            ? item.thumbnail
+            : 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+        const titleText = item.title || 'Unknown Title';
+
         row.innerHTML = `
-            <img class="thumb" src="${item.thumbnail || ""}" alt="">
-            <span class="title">${item.title}</span>
+            <img class="suggestion-thumbnail" src="${thumbnailSrc}" alt="">
+            <span class="suggestion-title">${titleText}</span>
         `;
 
         if (onItemMouseDown) {
             row.addEventListener("mousedown", onItemMouseDown, { capture: true });
         }
         row.addEventListener("click", () => onSelect(item));
-        dd.appendChild(row);
+
+        dropdown.appendChild(row);
     });
 
-    dd.style.visibility = "visible";
-    dd.style.opacity    = "1";
-    DOM.youtubeInput.setAttribute("aria-expanded", "true");
-}
+    dropdown.style.visibility = "visible";
+    requestAnimationFrame(() => {
+        dropdown.style.opacity = "1";
+    });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// The remainder of ui.js (preview handling, progress UI, resetUI, etc.)
-// is identical to the version you supplied.  No lines below were modified.
-// ─────────────────────────────────────────────────────────────────────────────
-// … (keep everything that follows unchanged) …
+    if (DOM.youtubeInput) {
+        DOM.youtubeInput.setAttribute("aria-expanded", "true");
+    }
+}
