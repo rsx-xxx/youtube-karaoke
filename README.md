@@ -86,6 +86,17 @@ This project uses modern tools to download YouTube videos, separate audio stems 
             ```
         * Get a Genius API token from [http://genius.com/api-clients](http://genius.com/api-clients).
 
+    * **(Optional) YouTube Cookies:**
+        If you encounter "Sign in to confirm you're not a bot" errors from YouTube, you can provide cookies:
+        ```dotenv
+        # Option 1: Extract cookies from your browser automatically
+        YTDLP_COOKIES_FROM_BROWSER="chrome"  # or: firefox, safari, edge, opera, brave, chromium
+
+        # Option 2: Use a cookies.txt file (Netscape format)
+        YTDLP_COOKIES_FILE="/path/to/your/cookies.txt"
+        ```
+        **Important:** Never commit cookies files to git - they contain session data!
+
 3.  **Running the Application (Locally):**
     * **Start the Backend:** From the `backend` directory:
         ```bash

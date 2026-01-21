@@ -6,7 +6,7 @@ from typing import Optional
 
 import ffmpeg as ffmpeg_python
 
-from utils.file_system import find_existing_file, COMMON_AUDIO_FORMATS
+from ..utils.file_system import find_existing_file, COMMON_AUDIO_FORMATS
 
 logger = logging.getLogger(__name__)
 
@@ -68,9 +68,16 @@ def _extract_audio_sync(video_path: Path, video_id: str, job_id: str, download_d
     logger.info(f"Job {job_id}: Converting/Extracting audio from '{source_path.name}' to '{audio_path_wav.name}'...")
     try:
         # Use ffmpeg-python for extraction/conversion
+        # High quality settings: 48kHz, 24-bit for better Demucs separation
         stream = ffmpeg_python.input(str(source_path))
-        # ac=2: Stereo, ar=44100: Sample rate 44.1kHz, format=wav, acodec=pcm_s16le standard WAV codec
-        stream = ffmpeg_python.output(stream, str(audio_path_wav), format="wav", ac=2, ar="44100", acodec="pcm_s16le", loglevel="warning")
+        stream = ffmpeg_python.output(
+            stream, str(audio_path_wav),
+            format="wav",
+            ac=2,              # Stereo
+            ar="48000",        # 48kHz sample rate (higher quality)
+            acodec="pcm_s24le", # 24-bit depth (better dynamic range)
+            loglevel="warning"
+        )
         # Overwrite if exists from a partial previous run
         stdout, stderr = ffmpeg_python.run(stream, capture_stdout=True, capture_stderr=True, overwrite_output=True)
 

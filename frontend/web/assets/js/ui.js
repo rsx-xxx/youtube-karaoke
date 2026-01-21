@@ -1,6 +1,7 @@
 // File: frontend/web/assets/js/ui.js
 import * as DOM from './dom.js'
 import { BASE_TITLE, DEFAULT_FAVICON } from './config.js'
+import { setOriginalKey, setOriginalBpm, setTrackMetadata } from './stems.js'
 
 console.log("[UI] Module loaded.")
 
@@ -193,6 +194,21 @@ export function resetUI(keepPreviewAndTitle = false) {
     }
     if (!keepPreviewAndTitle || (DOM.stemsSection && DOM.stemsSection.style.display === 'none'))
         import('./stems.js').then(S => S.destroyStemPlayers()).catch(err => console.error("Error destroying stems", err))
+
+    // Reset BPM/Key display
+    if (DOM.trackBpmEl) DOM.trackBpmEl.textContent = '--';
+    if (DOM.trackKeyEl) {
+        DOM.trackKeyEl.textContent = '--';
+        DOM.trackKeyEl.dataset.originalKey = '';
+    }
+    if (DOM.trackKeyTransposedEl) DOM.trackKeyTransposedEl.textContent = '';
+
+    // Reset lyrics sidebar
+    if (DOM.resultsLayout) DOM.resultsLayout.dataset.lyricsExpanded = 'false';
+    if (DOM.fullLyricsTextarea) {
+        DOM.fullLyricsTextarea.value = '';
+        DOM.fullLyricsTextarea.placeholder = 'Lyrics will appear here after processing...';
+    }
 }
 
 export function showProcessingUI() {
@@ -281,7 +297,18 @@ export function updateProgressUI(data, jobStartTime) {
             const stepDiv = document.createElement("div");
             stepDiv.className = "progress-step active-step";
             const now = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
-            stepDiv.innerHTML = `<span class="step-time">[${now}]</span><span class="step-message">${message}</span>`;
+
+            // Safe DOM construction (prevents XSS)
+            const timeSpan = document.createElement("span");
+            timeSpan.className = "step-time";
+            timeSpan.textContent = `[${now}]`;
+
+            const messageSpan = document.createElement("span");
+            messageSpan.className = "step-message";
+            messageSpan.textContent = message;
+
+            stepDiv.appendChild(timeSpan);
+            stepDiv.appendChild(messageSpan);
             DOM.progressStepsContainer.appendChild(stepDiv);
             DOM.progressStepsContainer.scrollTop = DOM.progressStepsContainer.scrollHeight;
         } else {
@@ -351,6 +378,9 @@ export function displayResults(result) {
         videoTitleEl.textContent = result.title || "Karaoke Video";
     }
 
+    // Set track metadata for stem download filenames
+    setTrackMetadata(result.title || null, result.artist || result.uploader || null);
+
     if (result.processed_path && DOM.karaokeVideo) {
         let videoUrl = result.processed_path;
         if (!videoUrl.startsWith('http') && !videoUrl.startsWith('/')) {
@@ -360,6 +390,7 @@ export function displayResults(result) {
         console.log("[UI] Setting video source to:", fullVideoUrl);
 
         DOM.karaokeVideo.src = fullVideoUrl;
+        DOM.karaokeVideo.muted = true; // Mute video by default - stems provide audio
         DOM.karaokeVideo.load();
 
         if (DOM.downloadBtn) {
@@ -380,6 +411,24 @@ export function displayResults(result) {
         if (DOM.karaokeVideo) DOM.karaokeVideo.removeAttribute("src");
         if (DOM.downloadBtn) DOM.downloadBtn.style.display = 'none';
         if (DOM.shareBtn) DOM.shareBtn.style.display = 'none';
+    }
+
+    // Display BPM and key if available
+    if (DOM.trackBpmEl) {
+        DOM.trackBpmEl.textContent = result.bpm ? result.bpm.toFixed(1) : '--';
+    }
+    // Set the original BPM in stems module for speed-adjusted display
+    setOriginalBpm(result.bpm || null);
+
+    if (DOM.trackKeyEl) {
+        DOM.trackKeyEl.textContent = result.key || '--';
+        DOM.trackKeyEl.dataset.originalKey = result.key || '';
+        // Set the original key in stems module for transposition display
+        setOriginalKey(result.key || null);
+    }
+    // Clear transposed key display (will be updated when pitch changes)
+    if (DOM.trackKeyTransposedEl) {
+        DOM.trackKeyTransposedEl.textContent = '';
     }
 
     if (!DOM.statusMessage || !DOM.statusMessage.classList.contains('error')) {
@@ -560,15 +609,24 @@ export function renderSuggestionDropdown(
         row.tabIndex = -1;
         row.setAttribute('role', 'option');
 
-        const thumbnailSrc = item.thumbnail
-            ? item.thumbnail
-            : 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-        const titleText = item.title || 'Unknown Title';
+        // Safe DOM construction (prevents XSS)
+        const img = document.createElement("img");
+        img.className = "suggestion-thumbnail";
+        img.alt = "";
+        // Validate thumbnail URL to prevent javascript: protocol attacks
+        const thumbnailSrc = item.thumbnail || '';
+        if (thumbnailSrc && (thumbnailSrc.startsWith('http://') || thumbnailSrc.startsWith('https://') || thumbnailSrc.startsWith('data:'))) {
+            img.src = thumbnailSrc;
+        } else {
+            img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+        }
 
-        row.innerHTML = `
-            <img class="suggestion-thumbnail" src="${thumbnailSrc}" alt="">
-            <span class="suggestion-title">${titleText}</span>
-        `;
+        const titleSpan = document.createElement("span");
+        titleSpan.className = "suggestion-title";
+        titleSpan.textContent = item.title || 'Unknown Title';
+
+        row.appendChild(img);
+        row.appendChild(titleSpan);
 
         if (onItemMouseDown) {
             row.addEventListener("mousedown", onItemMouseDown, { capture: true });

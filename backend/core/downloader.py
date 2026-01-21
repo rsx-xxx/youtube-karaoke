@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Tuple, Optional, List, Dict, Any
 import yt_dlp
 
-from utils.file_system import find_existing_file, COMMON_VIDEO_FORMATS, COMMON_AUDIO_FORMATS
-from config import settings
+from ..utils.file_system import find_existing_file, COMMON_VIDEO_FORMATS, COMMON_AUDIO_FORMATS
+from ..config import settings
 
 logger = logging.getLogger(__name__)
 logger_sugg = logging.getLogger(__name__ + ".suggestions")
@@ -28,9 +28,70 @@ async def download_video(job_id: str, url_or_search: str, download_dir: Path) ->
         logger.error(f"Download step failed for job {job_id}: {e}", exc_info=True)
         raise ValueError(f"Download failed: {e}") from e
 
+def _extract_video_id_from_url(url: str) -> Optional[str]:
+    """Extract video ID from URL without making API calls."""
+    match = YOUTUBE_URL_REGEX.match(url)
+    if match:
+        return match.group(1)
+    return None
+
+
+def _fetch_metadata_only(url: str, job_id: str, video_id: str) -> Tuple[str, str]:
+    """Fetch only metadata (title, uploader) without downloading - for cached videos."""
+    ydl_opts: Dict[str, Any] = {
+        'quiet': True,
+        'no_warnings': True,
+        'noplaylist': True,
+        'socket_timeout': 15,
+        'retries': 2,
+        'skip_download': True,
+        'extract_flat': False,
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        },
+    }
+
+    # Add cookie authentication
+    if settings.YTDLP_COOKIES_FILE:
+        ydl_opts['cookiefile'] = settings.YTDLP_COOKIES_FILE
+    elif settings.YTDLP_COOKIES_FROM_BROWSER:
+        ydl_opts['cookiesfrombrowser'] = (settings.YTDLP_COOKIES_FROM_BROWSER,)
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            logger.info(f"Job {job_id}: Fetching metadata for cached video {video_id}...")
+            info = ydl.extract_info(url, download=False)
+
+            if info:
+                if 'entries' in info and info.get('entries'):
+                    info = info['entries'][0]
+
+                title = info.get('title', f'Video {video_id}')
+                uploader = info.get('uploader_id') or info.get('uploader', 'Unknown')
+                logger.info(f"Job {job_id}: Metadata fetched for cached video: '{title[:50]}...' by '{uploader}'")
+                return title, uploader
+    except Exception as e:
+        logger.warning(f"Job {job_id}: Failed to fetch metadata for cached video {video_id}: {e}")
+
+    # Fallback - return placeholder if metadata fetch fails
+    return f"Video {video_id}", "Unknown"
+
+
 def _download_video_sync(url_or_search: str, job_id: str, download_dir: Path) -> Tuple[str, Path, str, str]:
     is_url = bool(YOUTUBE_URL_REGEX.match(url_or_search))
     target_input = url_or_search
+
+    # Try to extract video_id from URL and check cache FIRST (before any API calls)
+    if is_url:
+        extracted_id = _extract_video_id_from_url(url_or_search)
+        if extracted_id:
+            existing_path = find_existing_file(download_dir, extracted_id, COMMON_VIDEO_FORMATS + COMMON_AUDIO_FORMATS)
+            if existing_path:
+                logger.info(f"Job {job_id}: [CACHE HIT] Video {extracted_id} already downloaded: {existing_path}")
+                # Fetch metadata for title/uploader (needed for Genius lyrics)
+                title, uploader = _fetch_metadata_only(url_or_search, job_id, extracted_id)
+                return extracted_id, existing_path, title, uploader
+
     if not is_url:
         target_input = f"ytsearch1:{url_or_search}"
         logger.info(f"Job {job_id}: Input doesn't look like a YouTube URL, treating as search: '{target_input}'")
@@ -38,7 +99,7 @@ def _download_video_sync(url_or_search: str, job_id: str, download_dir: Path) ->
         logger.info(f"Job {job_id}: Input looks like a YouTube URL: '{target_input[:100]}...'")
 
     output_template_pattern = str(download_dir / '%(id)s.%(ext)s')
-    chosen_format_string = 'bestvideo+bestaudio/best'
+    chosen_format_string = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best'
     ydl_opts: Dict[str, Any] = {
         'format': chosen_format_string,
         'outtmpl': output_template_pattern,
@@ -48,7 +109,22 @@ def _download_video_sync(url_or_search: str, job_id: str, download_dir: Path) ->
         'socket_timeout': settings.YTDLP_SOCKET_TIMEOUT,
         'retries': settings.YTDLP_RETRIES,
         'ignoreerrors': False,
+        'merge_output_format': 'mp4',
+        # User agent to avoid bot detection
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+        },
     }
+
+    # Add cookie authentication
+    if settings.YTDLP_COOKIES_FILE:
+        ydl_opts['cookiefile'] = settings.YTDLP_COOKIES_FILE
+        logger.info(f"Job {job_id}: Using cookies from file: {settings.YTDLP_COOKIES_FILE}")
+    elif settings.YTDLP_COOKIES_FROM_BROWSER:
+        ydl_opts['cookiesfrombrowser'] = (settings.YTDLP_COOKIES_FROM_BROWSER,)
+        logger.info(f"Job {job_id}: Using cookies from browser: {settings.YTDLP_COOKIES_FROM_BROWSER}")
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -133,7 +209,16 @@ async def get_youtube_metadata(url: str) -> Optional[Dict]:
         'extract_flat': False,
         'skip_download': True,
         'ignoreerrors': True,
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        },
     }
+
+    # Add cookie authentication for metadata fetch
+    if settings.YTDLP_COOKIES_FILE:
+        ydl_opts['cookiefile'] = settings.YTDLP_COOKIES_FILE
+    elif settings.YTDLP_COOKIES_FROM_BROWSER:
+        ydl_opts['cookiesfrombrowser'] = (settings.YTDLP_COOKIES_FROM_BROWSER,)
 
     def run_ydl_metadata():
         thread_logger = logging.getLogger(__name__ + ".ydl_metadata_thread")
@@ -185,9 +270,17 @@ async def get_youtube_suggestions(query: str, max_results: int = 10) -> List[Dic
         ydl_opts: Dict[str, Any] = {
             'quiet': True, 'no_warnings': True, 'noplaylist': True,
             'socket_timeout': 10, 'retries': 1, 'dump_single_json': True,
-            'extract_flat': True, 'force_generic_extractor': True,
+            'extract_flat': 'in_playlist',  # Better for search results
             'ignoreerrors': True, 'geo_bypass': False,
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            },
         }
+        # Add cookie authentication for suggestions
+        if settings.YTDLP_COOKIES_FILE:
+            ydl_opts['cookiefile'] = settings.YTDLP_COOKIES_FILE
+        elif settings.YTDLP_COOKIES_FROM_BROWSER:
+            ydl_opts['cookiesfrombrowser'] = (settings.YTDLP_COOKIES_FROM_BROWSER,)
 
         def run_ydl_search():
             thread_logger = logging.getLogger(__name__ + ".ydl_sugg_thread")

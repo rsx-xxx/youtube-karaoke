@@ -30,8 +30,33 @@ function setupCoreListeners() {
     if (DOM.youtubeInput) DOM.youtubeInput.addEventListener('keydown', handleInputEnterKey)
     setupGlobalStemControls()
     setupVideoEventListeners()
+    setupLyricsSidebarControls()
     if (DOM.lockStems) DOM.lockStems.addEventListener('change', Stems.handleLockStemsChange)
     window.addEventListener("beforeunload", handlePageUnload)
+}
+
+function setupLyricsSidebarControls() {
+    // Toggle lyrics sidebar button (in results header)
+    if (DOM.toggleLyricsSidebarBtn) {
+        DOM.toggleLyricsSidebarBtn.addEventListener('click', toggleLyricsSidebar)
+    }
+    // Close lyrics sidebar button (in sidebar header)
+    if (DOM.closeLyricsSidebarBtn) {
+        DOM.closeLyricsSidebarBtn.addEventListener('click', closeLyricsSidebar)
+    }
+}
+
+function toggleLyricsSidebar() {
+    if (!DOM.resultsLayout) return
+    const isExpanded = DOM.resultsLayout.dataset.lyricsExpanded === 'true'
+    DOM.resultsLayout.dataset.lyricsExpanded = isExpanded ? 'false' : 'true'
+    console.log(`[App] Lyrics sidebar ${isExpanded ? 'collapsed' : 'expanded'}`)
+}
+
+function closeLyricsSidebar() {
+    if (!DOM.resultsLayout) return
+    DOM.resultsLayout.dataset.lyricsExpanded = 'false'
+    console.log('[App] Lyrics sidebar closed')
 }
 
 function handleInputEnterKey(e) {
@@ -146,10 +171,6 @@ async function handleCancelClick() {
     }
 }
 
-// File: frontend/web/assets/js/app.js
-
-// ... other imports and code ...
-
 async function handleProcessClick() {
     if (!DOM.youtubeInput) return;
     const urlOrSearch = DOM.youtubeInput.value.trim();
@@ -187,19 +208,15 @@ async function handleProcessClick() {
     UI.showProcessingUI(); // Show spinners, progress bars etc.
 
     try {
-        let pitchShifts = null;
-        if (DOM.stemsContainer && DOM.stemsContainer.children.length > 0) {
-            const vals = Stems.getStemPitches();
-            const payload = {};
-            let has = false;
-            STEM_DEFINITIONS.forEach((def, idx) => {
-                const p = (idx < vals.length && typeof vals[idx] === 'number') ? vals[idx] : 0;
-                if (p !== 0) {
-                    payload[def.name.toLowerCase()] = p;
-                    has = true;
-                }
-            });
-            if (has) pitchShifts = payload;
+        // Get global pitch from slider if available (for re-processing with pitch)
+        // Note: The pitch slider is primarily for realtime preview, but if user
+        // wants to export with pitch applied, we pass it to the backend
+        let globalPitch = null;
+        if (DOM.globalPitchSlider && !DOM.globalPitchSlider.disabled) {
+            const pitchValue = parseInt(DOM.globalPitchSlider.value, 10);
+            if (pitchValue !== 0) {
+                globalPitch = pitchValue;
+            }
         }
 
         const jobId = await API.startProcessingJob(
@@ -208,7 +225,7 @@ async function handleProcessClick() {
             position,
             generateSubs, // Use the (potentially safer defaulted) generateSubs value
             customLyrics,
-            pitchShifts,
+            globalPitch,
             size
         );
         currentJobId = jobId;

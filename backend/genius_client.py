@@ -49,13 +49,16 @@ class GeniusClient:
     WEB = "https://genius.com"
 
     def __init__(self, token: Optional[str] = None, *, hits: int = 15) -> None:
-        token = token or os.getenv("GENIUS_API_TOKEN")
+        # Import here to avoid circular imports and ensure settings are loaded
+        from .config import settings
+        token = token or settings.GENIUS_API_TOKEN
         self.enabled = bool(token)
         self._hits = max(1, min(hits, 20))
         self._token = token
 
         if self.enabled:
             _HTTP.headers["Authorization"] = f"Bearer {self._token}"
+            log.info("Genius API client initialized with token.")
         else:
             log.warning("GENIUS_API_TOKEN not set — Genius integration will be disabled.")
 
@@ -65,9 +68,20 @@ class GeniusClient:
             return []
 
         cleaned_title = " ".join(_clean_tokens(title))
-        query_parts = []
+
+        # Extract primary artist name (first name before comma, typically the band/artist name)
+        primary_artist = None
         if artist:
-            cleaned_artist_tokens = _clean_tokens(artist)
+            # Split by comma and take first part (usually the main artist/band name)
+            first_artist = artist.split(',')[0].strip()
+            # Also handle " & " and " feat " separators
+            first_artist = re.split(r'\s*[&]\s*|\s+feat\.?\s+|\s+ft\.?\s+', first_artist, flags=re.IGNORECASE)[0].strip()
+            if first_artist:
+                primary_artist = first_artist
+
+        query_parts = []
+        if primary_artist:
+            cleaned_artist_tokens = _clean_tokens(primary_artist)
             if cleaned_artist_tokens:
                 query_parts.extend(cleaned_artist_tokens)
 
@@ -80,7 +94,7 @@ class GeniusClient:
             query_parts.append(cleaned_title)
             search_query = " ".join(query_parts)
 
-        log.debug(f"Genius search: Original Title='{title}', Artist='{artist}'. Cleaned Query='{search_query}'")
+        log.debug(f"Genius search: Original Title='{title}', Artist='{artist}', Primary Artist='{primary_artist}'. Cleaned Query='{search_query}'")
 
         if not search_query:
             return []

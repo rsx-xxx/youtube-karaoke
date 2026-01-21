@@ -6,20 +6,21 @@ import shutil
 from pathlib import Path
 from typing import Tuple, List, Dict, Any, Optional
 
-from core.downloader import download_video
-from core.audio_extractor import extract_audio
-from core.separator import separate_tracks
-from core.transcriber import transcribe_audio
-from core.subtitles import generate_ass_karaoke
-from core.merger import merge_with_subtitles, merge_without_subtitles
-from lyrics_processing import (
+from .core.downloader import download_video
+from .core.audio_extractor import extract_audio
+from .core.separator import separate_tracks
+from .core.transcriber import transcribe_audio
+from .core.audio_analyzer import analyze_audio
+from .core.subtitles import generate_ass_karaoke
+from .core.merger import merge_with_subtitles, merge_without_subtitles
+from .lyrics_processing import (
     fetch_lyrics_from_genius,
     prepare_segments_for_karaoke,
     align_custom_lyrics_with_word_times
 )
-from utils.progress_manager import set_progress, get_progress, STEP_RANGES, job_tasks, progress_dict
-from utils.file_system import cleanup_job_files
-from config import settings
+from .utils.progress_manager import set_progress, get_progress, STEP_RANGES, job_tasks, progress_dict
+from .utils.file_system import cleanup_job_files
+from .config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +132,8 @@ async def _finalize_step(
         processed_video_path: Optional[Path],
         title: str,
         stems_dir: Optional[Path],
-        processed_base_dir: Path
+        processed_base_dir: Path,
+        audio_analysis: Optional[Dict] = None
 ):
     if not processed_video_path or not processed_video_path.is_file():
         logger.error(
@@ -196,7 +198,10 @@ async def _finalize_step(
         "video_id": video_id,
         "processed_path": final_video_uri,
         "title": title,
-        "stems_base_path": relative_stems_base_uri
+        "stems_base_path": relative_stems_base_uri,
+        "bpm": audio_analysis.get("bpm") if audio_analysis else None,
+        "key": audio_analysis.get("key") if audio_analysis else None,
+        "key_confidence": audio_analysis.get("key_confidence") if audio_analysis else None
     }
     set_progress(job_id, 100, "Karaoke video created successfully!", result=result_data, is_step_start=False,
                  step_name="finalize")
@@ -213,15 +218,16 @@ async def process_video_job(
         url_or_search: Optional[str] = None,
         local_file_path_str: Optional[str] = None,
         selected_lyrics: Optional[str] = None,
-        pitch_shifts: Optional[Dict[str, float]] = None
+        global_pitch: Optional[float] = None,
+        pitch_shifts: Optional[Dict[str, float]] = None  # Deprecated, kept for backwards compatibility
 ):
     loop = asyncio.get_running_loop()
     start_time = time.monotonic()
     set_progress(job_id, 0, "Job accepted, preparing...", is_step_start=True, step_name="init")
 
     task = loop.create_task(
-        _run_job(job_id, url_or_search, local_file_path_str, language, sub_pos, gen_subs, selected_lyrics, pitch_shifts,
-                 final_font_size)
+        _run_job(job_id, url_or_search, local_file_path_str, language, sub_pos, gen_subs, selected_lyrics, global_pitch,
+                 pitch_shifts, final_font_size)
     )
     job_tasks[job_id] = task
     logger.info(f"Created background task for job {job_id}")
@@ -272,6 +278,7 @@ async def _run_job(
         sub_pos: str,
         gen_subs: bool,
         selected_lyrics: Optional[str] = None,
+        global_pitch: Optional[float] = None,
         pitch_shifts: Optional[Dict[str, float]] = None,
         final_font_size: int = 30
 ):
@@ -289,6 +296,7 @@ async def _run_job(
     instrumental_path: Optional[Path] = None
     vocals_path: Optional[Path] = None
     transcript_segments_with_words: List[Dict] = []
+    audio_analysis_result: Dict = {}  # BPM, key, key_confidence
     step_timings = {}
 
     local_upload_temp_job_folder: Optional[Path] = None
@@ -299,7 +307,7 @@ async def _run_job(
         nonlocal video_id, video_path, title, uploader, audio_path, \
             instrumental_path, vocals_path, stems_output_dir, subtitle_path, \
             processed_video_path, transcript_segments_with_words, \
-            video_id_for_cleanup
+            video_id_for_cleanup, audio_analysis_result
 
         step_start_time = time.monotonic()
         start_progress, end_progress = STEP_RANGES.get(step_name, (0, 0))
@@ -321,6 +329,8 @@ async def _run_job(
                 video_id_for_cleanup = video_id
             elif step_name == "extract_audio":
                 audio_path = result
+            elif step_name == "analyze_audio":
+                audio_analysis_result = result if result else {}
             elif step_name == "separate_tracks":
                 instrumental_path, vocals_path, stems_output_dir = result
             elif step_name == "transcribe":
@@ -377,17 +387,26 @@ async def _run_job(
         await run_step("extract_audio", extract_audio, video_path, video_id, settings.DOWNLOADS_DIR)
         if not audio_path: raise ValueError("Audio path not set after extraction.")
 
+        # Analyze audio for BPM and key detection
+        await run_step("analyze_audio", analyze_audio, audio_path, video_id, settings.PROCESSED_DIR)
+
         await run_step("separate_tracks", separate_tracks, audio_path, video_id, settings.PROCESSED_DIR,
                        settings.DEMUCS_MODEL, settings.DEVICE)
         if not vocals_path or not instrumental_path: raise ValueError("Stems paths not set after separation.")
 
-        merge_kwargs = {"stem_config": {"pitch_shifts": pitch_shifts} if pitch_shifts else None}
+        # Build stem config with global_pitch (new) or pitch_shifts (deprecated)
+        stem_config = {}
+        if global_pitch is not None and global_pitch != 0:
+            stem_config["global_pitch"] = global_pitch
+        elif pitch_shifts:
+            stem_config["pitch_shifts"] = pitch_shifts
+        merge_kwargs = {"stem_config": stem_config if stem_config else None}
         logger.info(f"Job {job_id}: Preparing merge step with pitch config: {merge_kwargs.get('stem_config')}")
 
         karaoke_ready_segments_for_ass: List[Dict] = []
         if gen_subs:
             logger.info(f"Job {job_id}: Subtitle generation is ENABLED.")
-            await run_step("transcribe", transcribe_audio, vocals_path, language)
+            await run_step("transcribe", transcribe_audio, vocals_path, language, video_id, settings.PROCESSED_DIR)
 
             if not transcript_segments_with_words:
                 logger.warning(
@@ -417,7 +436,7 @@ async def _run_job(
                         f"Job {job_id}: Lyrics processing produced {len(karaoke_ready_segments_for_ass)} segments for ASS generation.")
                     await run_step("generate_ass", generate_ass_karaoke,  # Changed from generate_srt
                                    karaoke_ready_segments_for_ass, video_id, settings.PROCESSED_DIR,
-                                   font_name='Poppins Bold', font_size=final_font_size, position=sub_pos)
+                                   font_name='Montserrat', font_size=final_font_size, position=sub_pos)
                     if subtitle_path and subtitle_path.exists():
                         logger.info(f"Job {job_id}: ASS file generated successfully at: {subtitle_path}")
                     else:
@@ -454,7 +473,7 @@ async def _run_job(
             raise RuntimeError(f"Merge step finished but the final video file is missing: {processed_video_path}")
 
         await run_step("finalize", _finalize_step, video_id, processed_video_path, title,
-                       stems_output_dir, settings.PROCESSED_DIR)
+                       stems_output_dir, settings.PROCESSED_DIR, audio_analysis_result)
         job_succeeded = True
 
     except asyncio.CancelledError:

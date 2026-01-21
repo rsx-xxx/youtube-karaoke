@@ -14,18 +14,13 @@ from starlette.websockets import WebSocketState
 from pydantic import BaseModel, Field, field_validator
 import shutil
 
-from genius_client import GeniusClient
 from rapidfuzz.fuzz import WRatio
-from config import settings
 
-try:
-    from .processing import process_video_job, get_progress, job_tasks
-    from .utils.progress_manager import kill_job, progress_dict
-    from .core.downloader import get_youtube_suggestions
-except ImportError:
-    from processing import process_video_job, get_progress, job_tasks
-    from utils.progress_manager import kill_job, progress_dict
-    from core.downloader import get_youtube_suggestions
+from .genius_client import GeniusClient
+from .config import settings
+from .processing import process_video_job, get_progress, job_tasks
+from .utils.progress_manager import kill_job, progress_dict
+from .core.downloader import get_youtube_suggestions
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -39,8 +34,12 @@ class ProcessRequest(BaseModel):
     custom_lyrics: Optional[str] = Field(
         None, description="User-provided full lyrics (overrides Genius)"
     )
+    global_pitch: Optional[float] = Field(
+        None, ge=-12, le=12,
+        description="Global pitch shift in semitones (-12 to +12), applies to all audio without changing tempo"
+    )
     pitch_shifts: Optional[Dict[str, float]] = Field(
-        None, description="Per-stem semitone shifts, e.g. {'vocals': 2}"
+        None, description="[DEPRECATED] Per-stem semitone shifts. Use global_pitch instead."
     )
     final_subtitle_size: int = Field(
         30, ge=10, le=100, description="Font size for final subtitles (px)"
@@ -100,8 +99,8 @@ async def start_processing(req: ProcessRequest):
         raise HTTPException(400, "Field 'url' is empty")
     job_id = str(uuid.uuid4())
     log.info(
-        "Job %s • url='%s' gen_subs=%s lang=%s font_size=%s",
-        job_id, url[:80], req.generate_subtitles, req.language, req.final_subtitle_size
+        "Job %s • url='%s' gen_subs=%s lang=%s font_size=%s global_pitch=%s",
+        job_id, url[:80], req.generate_subtitles, req.language, req.final_subtitle_size, req.global_pitch
     )
     progress_dict[job_id] = {
         "progress": 0, "message": "Job accepted, preparing…",
@@ -111,8 +110,8 @@ async def start_processing(req: ProcessRequest):
         process_video_job(
             job_id=job_id, url_or_search=url, language=req.language,
             sub_pos=req.subtitle_position, gen_subs=req.generate_subtitles,
-            selected_lyrics=req.custom_lyrics, pitch_shifts=req.pitch_shifts,
-            final_font_size=req.final_subtitle_size,
+            selected_lyrics=req.custom_lyrics, global_pitch=req.global_pitch,
+            pitch_shifts=req.pitch_shifts, final_font_size=req.final_subtitle_size,
         )
     )
     return JSONResponse({"job_id": job_id})
@@ -240,6 +239,7 @@ class LocalProcessRequestForm(BaseModel):
     subtitle_position: str = "bottom"
     generate_subtitles: bool = True
     custom_lyrics: Optional[str] = None
+    global_pitch: Optional[float] = None
     final_subtitle_size: int = 30
 
 @router.post("/process-local-file", status_code=202)
@@ -277,6 +277,7 @@ async def start_processing_local_file(
             sub_pos=form_data.subtitle_position,
             gen_subs=form_data.generate_subtitles,
             selected_lyrics=form_data.custom_lyrics,
+            global_pitch=form_data.global_pitch,
             pitch_shifts=form_data.pitch_shifts,
             final_font_size=form_data.final_subtitle_size
         )

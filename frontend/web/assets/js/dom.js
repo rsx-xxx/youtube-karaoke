@@ -52,4 +52,21 @@ export const globalSpeedSlider = document.getElementById('global-speed');
 export const globalSpeedValue = document.getElementById('global-speed-value'); // Added value display
 export const lockStems = document.getElementById('lock-stems'); // Added lock stems checkbox reference
 
+// Global pitch controls
+export const globalPitchSlider = document.getElementById('global-pitch');
+export const globalPitchValue = document.getElementById('global-pitch-value');
+export const resetPitchBtn = document.getElementById('reset-pitch');
+
+// Track info display
+export const trackBpmEl = document.getElementById('track-bpm');
+export const trackKeyEl = document.getElementById('track-key');
+export const trackKeyTransposedEl = document.getElementById('track-key-transposed');
+
+// Lyrics sidebar (split view)
+export const resultsLayout = document.getElementById('results-layout');
+export const toggleLyricsSidebarBtn = document.getElementById('toggle-lyrics-sidebar');
+export const closeLyricsSidebarBtn = document.getElementById('close-lyrics-sidebar');
+export const lyricsSidebar = document.getElementById('lyrics-sidebar');
+export const fullLyricsTextarea = document.getElementById('full-lyrics-textarea');
+
 // Export all elements needed by other modules

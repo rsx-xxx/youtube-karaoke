@@ -22,32 +22,29 @@ except ImportError:
 # Try importing lyricsgenius and the specific Song class
 try:
     import lyricsgenius
-    # Import the Song class directly if possible for type hinting
-    from lyricsgenius.song import Song as GeniusSongObject
+    # Import the Song class - location changed in newer versions
+    try:
+        from lyricsgenius.types import Song as GeniusSongObject
+    except ImportError:
+        from lyricsgenius.song import Song as GeniusSongObject
 
     HAVE_LYRICSGENIUS = True
+    logging.getLogger(__name__).info("lyricsgenius library loaded successfully.")
 except ImportError:
     lyricsgenius = None
     # Define fallback type hint if import fails
     GeniusSongObject = Any  # type: ignore
     HAVE_LYRICSGENIUS = False
     logging.getLogger(__name__).warning("`lyricsgenius` library not found. Genius lyrics fetching will be disabled.")
-except AttributeError:
-    # Handle cases where lyricsgenius might be installed but 'song' module or 'Song' class isn't found
-    lyricsgenius = None
-    GeniusSongObject = Any  # type: ignore
-    HAVE_LYRICSGENIUS = False
-    logging.getLogger(__name__).error(
-        "Could not import 'Song' from 'lyricsgenius.song'. Genius features might be broken.")
 
-from config import settings
+from .config import settings
 
 logger = logging.getLogger(__name__)
 
 # --- Configuration ---
 LYRICS_ALIGNMENT_THRESHOLD = settings.LYRICS_ALIGNMENT_THRESHOLD
 # Threshold for considering a whisper word a match for an official word
-WORD_MATCH_THRESHOLD = 75  # (0-100 for rapidfuzz/difflib)
+WORD_MATCH_THRESHOLD = 65  # (0-100 for rapidfuzz/difflib) - lowered for Cyrillic tolerance
 
 NON_LYRIC_KEYWORDS = [
     "transl", "перев", "interpret", "оригин", "subtit", "caption", "sync",
@@ -77,11 +74,12 @@ PATTERN_SPLIT_WORDS = re.compile(r"([\w'-]+)")
 
 # --- Text Processing Functions ---
 def normalize_text(text: str) -> str:
-    """Normalizes text for matching: NFKC, lowercase, remove non-alphanum (keep spaces, hyphens, apostrophes)."""
+    """Normalizes text for matching: NFKC, lowercase, keep letters (including Cyrillic), numbers, spaces."""
     if not isinstance(text, str): return ""
     text = unicodedata.normalize('NFKC', text).lower()
-    # Allow letters, numbers, spaces, hyphens, apostrophes
-    text = re.sub(r"[^a-z0-9\s'-]", '', text)
+    # Keep Unicode letters (\p{L}), numbers, spaces, hyphens, apostrophes
+    # This regex keeps Cyrillic and other non-Latin scripts
+    text = re.sub(r"[^\w\s'-]", '', text, flags=re.UNICODE)
     text = PATTERN_WHITESPACE.sub(' ', text).strip()
     return text
 
@@ -222,47 +220,289 @@ def fetch_lyrics_from_genius(
 
 
 # --- Alignment Functions ---
-def _find_best_word_match(
-        official_word_norm: str,
-        whisper_words_candidates: List[Tuple[str, int]],
-) -> Optional[Tuple[int, float]]:
-    """Finds the best matching whisper word index from the candidates list for a given official word."""
-    best_score = -1.0
-    best_idx_in_candidates = -1
 
-    if not whisper_words_candidates:
-        return None
+# Improved thresholds for better alignment
+EXACT_MATCH_THRESHOLD = 90  # Very high confidence match
+GOOD_MATCH_THRESHOLD = 70   # Good match (lowered for better recall)
+MIN_MATCH_THRESHOLD = 50    # Minimum acceptable match (lowered for Cyrillic/non-Latin)
+CONTEXT_WINDOW_BONUS = 20   # Bonus for matches within expected position (increased)
+
+def _calculate_word_similarity(word1: str, word2: str) -> float:
+    """Calculate similarity between two normalized words using multiple methods."""
+    if not word1 or not word2:
+        return 0.0
+
+    # Exact match
+    if word1 == word2:
+        return 100.0
+
+    # One word is a substring of the other (common for contractions, prefixes)
+    if word1 in word2 or word2 in word1:
+        len_ratio = min(len(word1), len(word2)) / max(len(word1), len(word2))
+        return 75.0 + 25.0 * len_ratio  # 75-100 based on length ratio
 
     if USE_RAPIDFUZZ:
-        choices = [w_candidate[0] for w_candidate in whisper_words_candidates]
-        match_result = process.extractOne(official_word_norm, choices, scorer=fuzz.WRatio,
-                                          score_cutoff=WORD_MATCH_THRESHOLD)
-        if match_result:
-            best_score = match_result[1]
-            best_idx_in_candidates = match_result[2]
+        # Use multiple scorers and take the best result
+        ratio_score = fuzz.ratio(word1, word2)
+        partial_score = fuzz.partial_ratio(word1, word2)
+        token_sort_score = fuzz.token_sort_ratio(word1, word2)
+
+        # Weight the scores based on word length
+        if len(word1) <= 2 or len(word2) <= 2:
+            # Very short words - be more lenient with partial matches
+            return max(ratio_score, partial_score * 0.85)
+        elif len(word1) <= 4 or len(word2) <= 4:
+            # Short words - partial match still important
+            return max(ratio_score, partial_score * 0.92, token_sort_score * 0.85)
+        else:
+            # Longer words - all methods equally weighted
+            return max(ratio_score, partial_score * 0.95, token_sort_score * 0.92)
     else:
         matcher = difflib.SequenceMatcher(isjunk=None, autojunk=False)
-        matcher.set_seq2(official_word_norm)
-        for i, (w_norm_candidate, _) in enumerate(whisper_words_candidates):
-            matcher.set_seq1(w_norm_candidate)
-            ratio = matcher.ratio() * 100
-            if ratio >= WORD_MATCH_THRESHOLD and ratio > best_score:
-                best_score = ratio
-                best_idx_in_candidates = i
+        matcher.set_seqs(word1, word2)
+        return matcher.ratio() * 100
 
-    if best_idx_in_candidates != -1:
-        return best_idx_in_candidates, best_score
+
+def _find_best_word_match_improved(
+        official_word_norm: str,
+        whisper_words_candidates: List[Tuple[str, int, float]],  # (norm_text, global_idx, start_time)
+        expected_time: Optional[float] = None,
+        time_tolerance: float = 5.0,  # seconds
+) -> Optional[Tuple[int, float, int]]:
+    """
+    Improved word matching that considers:
+    - Fuzzy text similarity
+    - Temporal proximity to expected position
+    - Context from surrounding words
+
+    Returns: (index_in_candidates, score, global_whisper_idx) or None
+    """
+    if not whisper_words_candidates or not official_word_norm:
+        return None
+
+    best_score = -1.0
+    best_idx_in_candidates = -1
+    best_global_idx = -1
+
+    for i, (w_norm, global_idx, start_time) in enumerate(whisper_words_candidates):
+        # Calculate base text similarity
+        text_score = _calculate_word_similarity(official_word_norm, w_norm)
+
+        if text_score < MIN_MATCH_THRESHOLD:
+            continue
+
+        # Apply temporal proximity bonus if expected time is known
+        time_bonus = 0.0
+        if expected_time is not None and start_time >= 0:
+            time_diff = abs(start_time - expected_time)
+            if time_diff <= time_tolerance:
+                # Linear bonus based on proximity - closer = more bonus
+                time_bonus = CONTEXT_WINDOW_BONUS * (1.0 - time_diff / time_tolerance)
+
+        # Position bonus - prefer earlier matches when scores are similar
+        position_bonus = max(0, (len(whisper_words_candidates) - i) * 0.1)
+
+        final_score = text_score + time_bonus + position_bonus
+
+        if final_score > best_score:
+            best_score = final_score
+            best_idx_in_candidates = i
+            best_global_idx = global_idx
+
+    if best_idx_in_candidates != -1 and best_score >= MIN_MATCH_THRESHOLD:
+        return best_idx_in_candidates, best_score, best_global_idx
     return None
+
+
+def _align_line_to_whisper_segment(
+        line_words_norm: List[str],
+        whisper_words: List[Dict],
+        start_search_idx: int,
+        expected_start_time: Optional[float] = None,
+) -> Tuple[List[Optional[int]], int]:
+    """
+    Align a single line of official lyrics to whisper words.
+    Returns: (list of matched whisper indices for each word, next search start index)
+    """
+    matched_indices: List[Optional[int]] = [None] * len(line_words_norm)
+    current_idx = start_search_idx
+    last_matched_time = expected_start_time or 0.0
+    last_matched_idx = start_search_idx
+
+    for word_idx, official_word in enumerate(line_words_norm):
+        if not official_word:
+            continue
+
+        # Adaptive window - larger when we're uncertain, smaller when confident
+        # Also allow looking backward a bit if we haven't matched anything yet
+        base_window = 50  # Increased base window
+        if word_idx > 0 and matched_indices[word_idx - 1] is not None:
+            # Previous word matched - use smaller window but still reasonable
+            base_window = 35
+
+        # Allow looking back slightly if no matches yet in this line
+        lookback = 5 if word_idx == 0 else 2
+        search_start = max(0, current_idx - lookback)
+
+        # Build candidate list
+        window_end = min(len(whisper_words), search_start + base_window)
+        candidates = []
+        for i in range(search_start, window_end):
+            w = whisper_words[i]
+            candidates.append((w['norm_text'], i, w['start']))
+
+        # Try to find match with reasonable time tolerance
+        expected_time = last_matched_time + 0.3 if word_idx > 0 else expected_start_time
+        match = _find_best_word_match_improved(
+            official_word, candidates,
+            expected_time=expected_time,
+            time_tolerance=5.0  # Increased tolerance
+        )
+
+        if match:
+            _, score, global_idx = match
+            matched_indices[word_idx] = global_idx
+            last_matched_time = whisper_words[global_idx]['start']
+            last_matched_idx = global_idx
+            # Move current_idx forward
+            current_idx = global_idx + 1
+        else:
+            # No match found - try with much larger window as fallback
+            extended_window_end = min(len(whisper_words), search_start + 100)  # Much larger
+            extended_candidates = []
+            for i in range(search_start, extended_window_end):
+                w = whisper_words[i]
+                extended_candidates.append((w['norm_text'], i, w['start']))
+
+            extended_match = _find_best_word_match_improved(
+                official_word, extended_candidates,
+                expected_time=last_matched_time + 0.5 if last_matched_time > 0 else expected_start_time,
+                time_tolerance=15.0  # Very tolerant for fallback
+            )
+
+            if extended_match:
+                _, score, global_idx = extended_match
+                matched_indices[word_idx] = global_idx
+                last_matched_time = whisper_words[global_idx]['start']
+                last_matched_idx = global_idx
+                current_idx = global_idx + 1
+
+    # Return the next search position, allowing some overlap for the next line
+    next_search_idx = max(start_search_idx + 1, last_matched_idx - 3)
+    return matched_indices, next_search_idx
+
+
+def _interpolate_timings(
+        matched_indices: List[Optional[int]],
+        whisper_words: List[Dict],
+        official_words: List[str],
+        line_start_time: float,
+        line_end_time: float,
+) -> List[Dict]:
+    """
+    Create timed word list, interpolating timings for unmatched words.
+    """
+    timed_words = []
+    n_words = len(official_words)
+
+    # Find anchor points (words with matched timings)
+    anchors = []  # (word_idx, start_time, end_time)
+    for idx, matched_idx in enumerate(matched_indices):
+        if matched_idx is not None and matched_idx < len(whisper_words):
+            w = whisper_words[matched_idx]
+            anchors.append((idx, w['start'], w['end']))
+
+    if not anchors:
+        # No anchors - distribute evenly
+        total_duration = max(0.5, line_end_time - line_start_time)
+        word_duration = total_duration / n_words
+        for idx, word in enumerate(official_words):
+            start = line_start_time + idx * word_duration
+            end = start + word_duration * 0.95  # Small gap between words
+            timed_words.append({'text': word, 'start': start, 'end': end})
+        return timed_words
+
+    # Interpolate between anchors
+    for idx, word in enumerate(official_words):
+        matched_idx = matched_indices[idx]
+
+        if matched_idx is not None and matched_idx < len(whisper_words):
+            # Direct match - use whisper timing
+            w = whisper_words[matched_idx]
+            timed_words.append({'text': word, 'start': w['start'], 'end': w['end']})
+        else:
+            # Find surrounding anchors for interpolation
+            prev_anchor = None
+            next_anchor = None
+
+            for a_idx, a_start, a_end in anchors:
+                if a_idx < idx:
+                    prev_anchor = (a_idx, a_start, a_end)
+                elif a_idx > idx and next_anchor is None:
+                    next_anchor = (a_idx, a_start, a_end)
+                    break
+
+            # Calculate interpolated timing
+            if prev_anchor and next_anchor:
+                # Interpolate between two anchors
+                prev_idx, prev_start, prev_end = prev_anchor
+                next_idx, next_start, next_end = next_anchor
+                words_between = next_idx - prev_idx
+                position = idx - prev_idx
+                time_span = next_start - prev_end
+                word_duration = time_span / words_between if words_between > 0 else 0.2
+                start = prev_end + position * word_duration
+                end = start + word_duration * 0.95
+            elif prev_anchor:
+                # Only have previous anchor - estimate forward
+                prev_idx, prev_start, prev_end = prev_anchor
+                gap = idx - prev_idx
+                word_duration = max(0.15, min(len(word) * 0.06, 0.5))
+                start = prev_end + (gap - 1) * word_duration + 0.05
+                end = start + word_duration
+            elif next_anchor:
+                # Only have next anchor - estimate backward
+                next_idx, next_start, next_end = next_anchor
+                gap = next_idx - idx
+                word_duration = max(0.15, min(len(word) * 0.06, 0.5))
+                end = next_start - (gap - 1) * word_duration - 0.05
+                start = max(line_start_time, end - word_duration)
+            else:
+                # Should not happen if we have anchors
+                word_duration = 0.3
+                start = line_start_time + idx * word_duration
+                end = start + word_duration * 0.95
+
+            # Ensure valid timing
+            start = max(0, start)
+            end = max(start + 0.05, end)
+
+            timed_words.append({'text': word, 'start': start, 'end': end})
+
+    # Fix overlaps and ensure monotonic timing
+    for i in range(1, len(timed_words)):
+        if timed_words[i]['start'] < timed_words[i-1]['end']:
+            # Overlap detected - adjust
+            mid_point = (timed_words[i-1]['end'] + timed_words[i]['start']) / 2
+            timed_words[i-1]['end'] = mid_point - 0.01
+            timed_words[i]['start'] = mid_point + 0.01
+
+    return timed_words
 
 
 def prepare_segments_for_karaoke(
         recognized_segments: List[Dict],
         official_lyrics_lines: Optional[List[str]] = None
 ) -> List[Dict]:
+    """
+    Improved karaoke segment preparation with better fuzzy matching.
+    Uses a two-phase approach: line-level alignment followed by word-level refinement.
+    """
     job_id_for_log = "N/A"
     logger.info(
         f"Job {job_id_for_log}: Preparing segments for karaoke. Recognized segments: {len(recognized_segments)}. Official lines: {len(official_lyrics_lines) if official_lyrics_lines else 'None'}.")
 
+    # Extract all timed words from Whisper recognition
     all_whisper_words_timed: List[Dict] = []
     for seg_idx, seg in enumerate(recognized_segments):
         if not (isinstance(seg, dict) and 'start' in seg and 'end' in seg and \
@@ -302,18 +542,18 @@ def prepare_segments_for_karaoke(
             f"Job {job_id_for_log}: No valid timed words found in recognized_segments. Cannot generate timed lyrics.")
         return []
 
+    # If no official lyrics, use Whisper transcription directly
     if not official_lyrics_lines:
         logger.info(f"Job {job_id_for_log}: No official lyrics provided. Using Whisper's transcription directly.")
         karaoke_segments_from_whisper = []
-        for seg in recognized_segments:  # Iterate original segments for structure
+        for seg in recognized_segments:
             segment_text = seg.get('text', '').strip()
             words_in_segment = []
 
             seg_start_time = seg.get('start')
             seg_end_time = seg.get('end')
 
-            if not (segment_text and isinstance(seg_start_time, (int, float)) and isinstance(seg_end_time,
-                                                                                             (int, float))):
+            if not (segment_text and isinstance(seg_start_time, (int, float)) and isinstance(seg_end_time, (int, float))):
                 continue
 
             for w_data in seg.get('words', []):
@@ -352,89 +592,113 @@ def prepare_segments_for_karaoke(
             f"Job {job_id_for_log}: Prepared {len(karaoke_segments_from_whisper)} segments using Whisper transcription.")
         return karaoke_segments_from_whisper
 
+    # === IMPROVED ALIGNMENT ALGORITHM ===
     logger.info(
-        f"Job {job_id_for_log}: Aligning {len(official_lyrics_lines)} official lines with {len(all_whisper_words_timed)} Whisper words.")
-    aligned_karaoke_segments = []
-    current_global_whisper_idx = 0
+        f"Job {job_id_for_log}: Aligning {len(official_lyrics_lines)} official lines with {len(all_whisper_words_timed)} Whisper words using improved algorithm.")
 
-    for official_line_text in official_lyrics_lines:
+    aligned_karaoke_segments = []
+    current_search_idx = 0
+    total_audio_duration = all_whisper_words_timed[-1]['end'] if all_whisper_words_timed else 0
+
+    # Calculate rough time per line for initial positioning
+    valid_lines = [l.strip() for l in official_lyrics_lines if l.strip()]
+    time_per_line = total_audio_duration / len(valid_lines) if valid_lines else 3.0
+
+    for line_idx, official_line_text in enumerate(official_lyrics_lines):
         official_line_text_strip = official_line_text.strip()
-        if not official_line_text_strip: continue
+        if not official_line_text_strip:
+            continue
 
         official_words_in_line = split_text_into_words(official_line_text_strip)
-        if not official_words_in_line: continue
+        if not official_words_in_line:
+            continue
 
-        timed_words_for_this_line = []
+        # Normalize words for matching
+        official_words_norm = [normalize_text(w) for w in official_words_in_line]
 
-        for official_word_idx, official_word_text in enumerate(official_words_in_line):
-            official_word_norm = normalize_text(official_word_text)
-            if not official_word_norm: continue
+        # Estimate expected start time for this line
+        expected_line_start = line_idx * time_per_line if line_idx > 0 else 0
 
-            word_start, word_end = -1.0, -1.0
+        # Use improved line-level alignment
+        matched_indices, next_search_idx = _align_line_to_whisper_segment(
+            official_words_norm,
+            all_whisper_words_timed,
+            current_search_idx,
+            expected_start_time=expected_line_start
+        )
 
-            search_window_start_idx = current_global_whisper_idx
-            search_window_end_idx = min(len(all_whisper_words_timed), search_window_start_idx + 20)
+        # Determine line boundaries based on matches
+        matched_times = []
+        for idx, match_idx in enumerate(matched_indices):
+            if match_idx is not None and match_idx < len(all_whisper_words_timed):
+                w = all_whisper_words_timed[match_idx]
+                matched_times.append((w['start'], w['end']))
 
-            whisper_candidates_in_window = []
-            for i in range(search_window_start_idx, search_window_end_idx):
-                whisper_candidates_in_window.append(
-                    (all_whisper_words_timed[i]['norm_text'], i)
-                )
+        if matched_times:
+            line_start = matched_times[0][0]
+            line_end = matched_times[-1][1]
+        elif aligned_karaoke_segments:
+            # No matches - estimate based on previous segment
+            prev_end = aligned_karaoke_segments[-1]['end']
+            line_start = prev_end + 0.1
+            line_end = line_start + len(official_words_in_line) * 0.3
+        else:
+            # First line with no matches
+            line_start = expected_line_start
+            line_end = line_start + len(official_words_in_line) * 0.3
 
-            match_info = None
-            if whisper_candidates_in_window:
-                match_info = _find_best_word_match(official_word_norm, whisper_candidates_in_window)
+        # Interpolate timings for all words in the line
+        timed_words = _interpolate_timings(
+            matched_indices,
+            all_whisper_words_timed,
+            official_words_in_line,
+            line_start,
+            line_end
+        )
 
-            if match_info:
-                best_match_idx_in_window = match_info[0]
-                matched_global_whisper_idx = whisper_candidates_in_window[best_match_idx_in_window][1]
-
-                matched_whisper_data = all_whisper_words_timed[matched_global_whisper_idx]
-                word_start = matched_whisper_data['start']
-                word_end = matched_whisper_data['end']
-
-                current_global_whisper_idx = matched_global_whisper_idx + 1
-            else:
-                prev_timed_word_end = timed_words_for_this_line[-1]['end'] if timed_words_for_this_line else -1.0
-
-                if prev_timed_word_end > 0:
-                    word_start = prev_timed_word_end + 0.05
-                elif current_global_whisper_idx < len(all_whisper_words_timed):
-                    word_start = all_whisper_words_timed[current_global_whisper_idx]['start']
-                elif aligned_karaoke_segments:
-                    word_start = aligned_karaoke_segments[-1]['end'] + 0.1
-                else:
-                    word_start = 0.0
-
-                estimated_duration = max(0.15, min(len(official_word_norm) * 0.07, 0.6))
-                word_end = word_start + estimated_duration
-
-                new_global_idx_after_estimation = current_global_whisper_idx
-                while new_global_idx_after_estimation < len(all_whisper_words_timed) and \
-                        all_whisper_words_timed[new_global_idx_after_estimation]['start'] < word_end:
-                    new_global_idx_after_estimation += 1
-
-                current_global_whisper_idx = new_global_idx_after_estimation
-
-            if word_start >= 0 and word_end > word_start:
-                timed_words_for_this_line.append({
-                    "text": official_word_text, "start": word_start, "end": word_end
-                })
-            else:
-                logger.warning(
-                    f"Job {job_id_for_log}: Could not assign valid timing for official word '{official_word_text}'. Skipping.")
-
-        if timed_words_for_this_line:
-            seg_start = timed_words_for_this_line[0]['start']
-            seg_end = timed_words_for_this_line[-1]['end']
+        if timed_words:
+            seg_start = timed_words[0]['start']
+            seg_end = timed_words[-1]['end']
             if seg_end >= seg_start:
                 aligned_karaoke_segments.append({
-                    "start": seg_start, "end": seg_end, "text": official_line_text_strip,
-                    "words": timed_words_for_this_line, "aligned": True
+                    "start": seg_start,
+                    "end": seg_end,
+                    "text": official_line_text_strip,
+                    "words": timed_words,
+                    "aligned": True
                 })
 
+        # Update search position
+        current_search_idx = next_search_idx
+
+    # Post-processing: fix any overlapping segments
+    for i in range(1, len(aligned_karaoke_segments)):
+        prev_seg = aligned_karaoke_segments[i - 1]
+        curr_seg = aligned_karaoke_segments[i]
+        if curr_seg['start'] < prev_seg['end']:
+            # Fix overlap
+            gap = 0.05
+            mid_point = (prev_seg['end'] + curr_seg['start']) / 2
+            prev_seg['end'] = mid_point - gap / 2
+            curr_seg['start'] = mid_point + gap / 2
+            # Also fix word timings
+            if prev_seg['words']:
+                prev_seg['words'][-1]['end'] = prev_seg['end']
+            if curr_seg['words']:
+                curr_seg['words'][0]['start'] = curr_seg['start']
+
     logger.info(
-        f"Job {job_id_for_log}: Alignment process created {len(aligned_karaoke_segments)} segments from official lyrics.")
+        f"Job {job_id_for_log}: Improved alignment created {len(aligned_karaoke_segments)} segments from official lyrics.")
+
+    # Log alignment statistics
+    total_words = sum(len(seg['words']) for seg in aligned_karaoke_segments)
+    matched_count = sum(
+        1 for seg in aligned_karaoke_segments
+        for w in seg.get('words', [])
+        if w.get('start', 0) > 0
+    )
+    logger.info(f"Job {job_id_for_log}: Aligned {matched_count}/{total_words} words successfully.")
+
     if not aligned_karaoke_segments and official_lyrics_lines:
         logger.warning(f"Job {job_id_for_log}: Alignment with official lyrics resulted in zero segments.")
 
@@ -445,81 +709,125 @@ def align_custom_lyrics_with_word_times(
         custom_lyrics_text: str,
         recognized_segments: List[Dict]
 ) -> List[Dict]:
+    """
+    Align custom lyrics with Whisper word timings using improved fuzzy matching.
+    This function is used when the user provides custom lyrics (e.g., from Genius selection).
+    """
     job_id_for_log = "N/A"
-    logger.info(f"Job {job_id_for_log}: Applying recognized word timings sequentially to custom lyrics.")
+    logger.info(f"Job {job_id_for_log}: Aligning custom lyrics with Whisper word timings (improved algorithm).")
+
     if not custom_lyrics_text:
         logger.warning(f"Job {job_id_for_log}: Empty custom lyrics text provided.")
         return []
 
-    all_recognized_word_timings: List[Dict] = []
+    # Extract all timed words with their text for fuzzy matching
+    all_whisper_words: List[Dict] = []
     for seg in recognized_segments:
         if isinstance(seg, dict) and 'words' in seg and isinstance(seg['words'], list):
             for w in seg['words']:
-                w_start_value = w.get('start')
-                w_end_value = w.get('end')
-                if (isinstance(w, dict) and 'start' in w and 'end' in w and
-                        isinstance(w_start_value, (int, float)) and isinstance(w_end_value, (int, float)) and
-                        w_end_value >= w_start_value):
-                    all_recognized_word_timings.append({"start": float(w_start_value), "end": float(w_end_value)})
-    all_recognized_word_timings.sort(key=lambda x: x['start'])
+                w_text = w.get('text', '').strip()
+                w_start = w.get('start')
+                w_end = w.get('end')
+                if (isinstance(w, dict) and w_text and
+                        isinstance(w_start, (int, float)) and isinstance(w_end, (int, float)) and
+                        w_end >= w_start):
+                    all_whisper_words.append({
+                        "text": w_text,
+                        "norm_text": normalize_text(w_text),
+                        "start": float(w_start),
+                        "end": float(w_end)
+                    })
+    all_whisper_words.sort(key=lambda x: x['start'])
 
-    if not all_recognized_word_timings:
-        logger.error(f"Job {job_id_for_log}: No valid word timings from Whisper. Cannot apply to custom lyrics.")
+    if not all_whisper_words:
+        logger.error(f"Job {job_id_for_log}: No valid word timings from Whisper. Cannot align custom lyrics.")
         return []
-    logger.debug(
-        f"Job {job_id_for_log}: Extracted {len(all_recognized_word_timings)} timed words from Whisper for custom lyrics.")
 
+    logger.debug(f"Job {job_id_for_log}: Extracted {len(all_whisper_words)} timed words from Whisper.")
+
+    # Parse custom lyrics into lines
     custom_lines = [line.strip() for line in custom_lyrics_text.splitlines() if line.strip()]
     if not custom_lines:
-        logger.warning(f"Job {job_id_for_log}: Custom lyrics text had no valid lines after splitting.")
+        logger.warning(f"Job {job_id_for_log}: Custom lyrics text had no valid lines.")
         return []
 
+    # Use the improved alignment approach
+    total_audio_duration = all_whisper_words[-1]['end'] if all_whisper_words else 0
+    time_per_line = total_audio_duration / len(custom_lines) if custom_lines else 3.0
+
     result_segments = []
-    current_rec_word_timing_idx = 0
-    total_rec_timings = len(all_recognized_word_timings)
-    last_assigned_end_time = 0.0
-    if total_rec_timings > 0:
-        last_assigned_end_time = max(0.0, all_recognized_word_timings[0]['start'] - 0.1)
+    current_search_idx = 0
 
-    for line_text in custom_lines:
-        custom_words_in_line = split_text_into_words(line_text)
-        if not custom_words_in_line: continue
+    for line_idx, line_text in enumerate(custom_lines):
+        custom_words = split_text_into_words(line_text)
+        if not custom_words:
+            continue
 
-        segment_words_data = []
-        line_start_time, line_end_time = -1.0, -1.0
+        custom_words_norm = [normalize_text(w) for w in custom_words]
+        expected_line_start = line_idx * time_per_line
 
-        for custom_word_text in custom_words_in_line:
-            word_start, word_end = -1.0, -1.0
+        # Use line-level alignment
+        matched_indices, next_search_idx = _align_line_to_whisper_segment(
+            custom_words_norm,
+            all_whisper_words,
+            current_search_idx,
+            expected_start_time=expected_line_start
+        )
 
-            if current_rec_word_timing_idx < total_rec_timings:
-                rec_timing = all_recognized_word_timings[current_rec_word_timing_idx]
-                word_start = rec_timing['start']
-                word_end = rec_timing['end']
-                if word_start < last_assigned_end_time:
-                    duration = max(0.1, word_end - word_start)
-                    word_start = last_assigned_end_time + 0.01
-                    word_end = word_start + duration
-                last_assigned_end_time = word_end
-                current_rec_word_timing_idx += 1
-            else:
-                estimated_duration = max(0.15, min(len(custom_word_text) * 0.07, 0.6))
-                word_start = last_assigned_end_time + 0.05
-                word_end = word_start + estimated_duration
-                last_assigned_end_time = word_end
-                if current_rec_word_timing_idx == total_rec_timings:  # Log only once
-                    logger.info(
-                        f"Job {job_id_for_log}: Exhausted Whisper timings. Estimating for remaining custom words.")
-                    current_rec_word_timing_idx += 1
+        # Determine line time boundaries
+        matched_times = []
+        for idx, match_idx in enumerate(matched_indices):
+            if match_idx is not None and match_idx < len(all_whisper_words):
+                w = all_whisper_words[match_idx]
+                matched_times.append((w['start'], w['end']))
 
-            segment_words_data.append({"text": custom_word_text, "start": word_start, "end": word_end})
-            if line_start_time < 0: line_start_time = word_start
-            line_end_time = word_end
+        if matched_times:
+            line_start = matched_times[0][0]
+            line_end = matched_times[-1][1]
+        elif result_segments:
+            prev_end = result_segments[-1]['end']
+            line_start = prev_end + 0.1
+            line_end = line_start + len(custom_words) * 0.3
+        else:
+            line_start = expected_line_start
+            line_end = line_start + len(custom_words) * 0.3
 
-        if segment_words_data and line_start_time >= 0 and line_end_time >= line_start_time:
-            result_segments.append({
-                'start': line_start_time, 'end': line_end_time, 'text': line_text,
-                'words': segment_words_data, 'aligned': False
-            })
+        # Interpolate timings
+        timed_words = _interpolate_timings(
+            matched_indices,
+            all_whisper_words,
+            custom_words,
+            line_start,
+            line_end
+        )
 
-    logger.info(f"Job {job_id_for_log}: Applied timings to {len(result_segments)} custom lyric lines.")
+        if timed_words:
+            seg_start = timed_words[0]['start']
+            seg_end = timed_words[-1]['end']
+            if seg_end >= seg_start:
+                result_segments.append({
+                    'start': seg_start,
+                    'end': seg_end,
+                    'text': line_text,
+                    'words': timed_words,
+                    'aligned': True
+                })
+
+        current_search_idx = next_search_idx
+
+    # Fix overlapping segments
+    for i in range(1, len(result_segments)):
+        prev_seg = result_segments[i - 1]
+        curr_seg = result_segments[i]
+        if curr_seg['start'] < prev_seg['end']:
+            gap = 0.05
+            mid_point = (prev_seg['end'] + curr_seg['start']) / 2
+            prev_seg['end'] = mid_point - gap / 2
+            curr_seg['start'] = mid_point + gap / 2
+            if prev_seg['words']:
+                prev_seg['words'][-1]['end'] = prev_seg['end']
+            if curr_seg['words']:
+                curr_seg['words'][0]['start'] = curr_seg['start']
+
+    logger.info(f"Job {job_id_for_log}: Aligned {len(result_segments)} custom lyric lines with improved algorithm.")
     return result_segments

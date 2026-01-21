@@ -32,28 +32,25 @@ export async function fetchSuggestions(query, signal) {
     }
 }
 
-export const API_START_JOB = '/api/process'
-export const API_CANCEL_JOB = '/api/cancel-job'
-
 export async function startProcessingJob(
     urlOrSearch,
     language,
     position,
     generateSubs,
     customLyrics,
-    pitchShifts,
+    globalPitch,
     finalFontSize
 ) {
     const body = {
-        url_or_search: urlOrSearch,
+        url: urlOrSearch,
         language,
-        position,
+        subtitle_position: position,
         generate_subtitles: !!generateSubs,
         custom_lyrics: customLyrics,
-        pitch_shifts: pitchShifts,
-        final_subtitle_size: finalFontSize
+        global_pitch: globalPitch || null,  // New: global pitch instead of pitch_shifts
+        final_subtitle_size: parseInt(finalFontSize, 10) || 30
     }
-    const r = await fetch(API_START_JOB, {
+    const r = await fetch(API_PROCESS, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)

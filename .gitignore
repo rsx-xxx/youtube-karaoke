@@ -1,0 +1,30 @@
+# Build and runtime
+/backend/downloads/
+/backend/processed/
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment and secrets
+/.env
+*.env
+*_cookies.txt
+cookies.txt
+
+# IDE and OS
+/.idea/
+/.claude/
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Tests
+/tests/
+
+# Dependencies (optional, usually committed)
+# poetry.lock
+
+# Chrome/browser data
+/chrome/
+chrome

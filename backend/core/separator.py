@@ -6,10 +6,15 @@ import sys
 import time
 import os
 from pathlib import Path
-from typing import Tuple, Dict, Optional, List # Added List
+from typing import Tuple, Dict, Optional, List
 
 import ffmpeg as ffmpeg_python
-from config import settings
+from ..config import settings
+from ..utils.version_tracker import (
+    get_file_hash,
+    is_stems_cache_valid,
+    update_stems_cache_metadata
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +49,14 @@ async def separate_tracks(
     actual_stems_dir = model_base_output_dir / demucs_model / input_audio_stem
     actual_stems_dir.mkdir(parents=True, exist_ok=True) # Ensure the final target directory exists
 
-    # Check cache in the ACTUAL stems directory
-    instrumental_path_cache, vocals_path_cache = get_existing_stems(actual_stems_dir)
+    # Check cache in the ACTUAL stems directory (with version validation)
+    instrumental_path_cache, vocals_path_cache = get_existing_stems(
+        actual_stems_dir,
+        video_id=video_id,
+        demucs_model=demucs_model,
+        audio_path=audio_path,
+        processed_dir=processed_dir
+    )
     if instrumental_path_cache and vocals_path_cache:
         logger.info(f"Job {job_id}: [CACHE] Using cached stems for {video_id}/{input_audio_stem} model {demucs_model} in {actual_stems_dir}")
         return instrumental_path_cache, vocals_path_cache, actual_stems_dir
@@ -66,7 +77,16 @@ async def separate_tracks(
             raise FileNotFoundError(f"Separation function finished but output stem file(s) not found post-thread: Missing {missing} in {actual_stems_dir}")
 
         logger.info(f"Job {job_id}: Separation successful. Instrumental: {instrumental_path}, Vocals: {vocals_path}, Dir: {actual_stems_dir}")
-        return instrumental_path, vocals_path, actual_stems_dir # Return the directory where stems ACTUALLY reside
+
+        # Update cache metadata with model version info
+        try:
+            audio_hash = get_file_hash(audio_path)
+            update_stems_cache_metadata(processed_dir, video_id, demucs_model, audio_hash)
+            logger.info(f"Job {job_id}: Saved stems cache metadata for {video_id}")
+        except Exception as cache_err:
+            logger.warning(f"Job {job_id}: Failed to save stems cache metadata: {cache_err}")
+
+        return instrumental_path, vocals_path, actual_stems_dir
 
     except Exception as e:
         logger.error(f"Track separation step failed for job {job_id}: {e}", exc_info=True)
@@ -235,9 +255,21 @@ def _separate_tracks_sync(
 
     logger.info(f"Job {job_id}: Creating instrumental track -> {instrumental_out_path.name} in {instrumental_out_path.parent}")
     try:
+        # High-quality mixing using amerge + pan for proper stereo summing
+        # This avoids the volume normalization issues of amix
         ffmpeg_inputs = [ffmpeg_python.input(str(p)) for p in input_stems_for_instrumental]
-        mixed_stream = ffmpeg_python.filter(ffmpeg_inputs, 'amix', inputs=len(ffmpeg_inputs), duration='first', dropout_transition=2)
-        output_stream = ffmpeg_python.output(mixed_stream, str(instrumental_out_path), acodec='pcm_s16le', loglevel="warning")
+
+        # Use amerge to combine all inputs, then pan to mix down to stereo
+        # This preserves the original levels better than amix
+        num_inputs = len(ffmpeg_inputs)
+        amerge_stream = ffmpeg_python.filter(ffmpeg_inputs, 'amerge', inputs=num_inputs)
+        # Pan filter to mix multiple stereo inputs into single stereo output
+        # Each input contributes equally
+        pan_expr = f"stereo|FL<{'+'.join([f'c{i*2}' for i in range(num_inputs)])}|FR<{'+'.join([f'c{i*2+1}' for i in range(num_inputs)])}"
+        mixed_stream = ffmpeg_python.filter(amerge_stream, 'pan', pan_expr)
+        # Normalize volume to prevent clipping
+        mixed_stream = ffmpeg_python.filter(mixed_stream, 'dynaudnorm', p=0.9, s=5)
+        output_stream = ffmpeg_python.output(mixed_stream, str(instrumental_out_path), acodec='pcm_s24le', ar='48000', loglevel="warning")
         # Run ffmpeg command
         stdout, stderr = ffmpeg_python.run(output_stream, capture_stdout=True, capture_stderr=True, overwrite_output=True)
         # Log ffmpeg output for debugging if needed
@@ -277,13 +309,27 @@ def get_stem_paths(actual_stems_dir: Path) -> Dict[str, Path]:
     paths[INSTRUMENTAL_STEM_FILENAME] = actual_stems_dir / INSTRUMENTAL_STEM_FILENAME
     return paths
 
-def get_existing_stems(actual_stems_dir: Path) -> Tuple[Optional[Path], Optional[Path]]:
+def get_existing_stems(
+    actual_stems_dir: Path,
+    video_id: Optional[str] = None,
+    demucs_model: Optional[str] = None,
+    audio_path: Optional[Path] = None,
+    processed_dir: Optional[Path] = None
+) -> Tuple[Optional[Path], Optional[Path]]:
     """
     Checks if essential stem files (instrumental, vocals) exist and are valid
-    in the specified *actual* Demucs output directory. Returns their paths if found, else (None, None).
+    in the specified *actual* Demucs output directory. Also validates cache metadata
+    for model/version match if video_id and demucs_model are provided.
+    Returns their paths if found and valid, else (None, None).
     """
     if not actual_stems_dir or not actual_stems_dir.is_dir():
         return None, None
+
+    # Check version-aware cache metadata if parameters provided
+    if video_id and demucs_model and processed_dir:
+        if not is_stems_cache_valid(processed_dir, video_id, demucs_model, audio_path):
+            logger.info(f"[CACHE] Stems cache metadata invalid for {video_id}")
+            return None, None
 
     # Use get_stem_paths to determine the expected full paths
     expected_paths = get_stem_paths(actual_stems_dir)
@@ -292,7 +338,7 @@ def get_existing_stems(actual_stems_dir: Path) -> Tuple[Optional[Path], Optional
 
     if not instrumental_path or not vocals_path:
         logger.warning(f"[CACHE] Could not determine expected paths for instrumental/vocals in {actual_stems_dir}")
-        return None, None # Should not happen if get_stem_paths is correct
+        return None, None
 
     instrumental_ok = False
     vocals_ok = False
@@ -303,7 +349,7 @@ def get_existing_stems(actual_stems_dir: Path) -> Tuple[Optional[Path], Optional
         if vocals_path.is_file() and vocals_path.stat().st_size > 1024:
             vocals_ok = True
     except FileNotFoundError:
-        return None, None # File might not exist yet or disappeared
+        return None, None
     except Exception as e:
         logger.warning(f"[CACHE] Error during file stat check in {actual_stems_dir}: {e}")
         return None, None
