@@ -17,6 +17,11 @@ from ..dependencies import progress_service_dep, ProgressServiceDep
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# Security: allowed file extensions for upload
+ALLOWED_EXTENSIONS = {'.mp4', '.mkv', '.webm', '.avi', '.mov', '.m4v', '.mp3', '.wav', '.flac', '.m4a', '.ogg'}
+# Security: max file size (500 MB)
+MAX_FILE_SIZE = 500 * 1024 * 1024
+
 
 @router.post("/process", response_model=JobResponse, status_code=202)
 async def start_processing(
@@ -81,6 +86,33 @@ async def start_processing_local_file(
     """
     Process a locally uploaded video/audio file into karaoke format.
     """
+    # Security: validate file extension
+    original_filename = file.filename or "uploaded_file"
+    file_ext = Path(original_filename).suffix.lower()
+    if file_ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File type '{file_ext}' not allowed. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
+        )
+
+    # Security: check file size (read in chunks to avoid memory issues)
+    file_size = 0
+    chunk_size = 1024 * 1024  # 1 MB chunks
+    temp_chunks = []
+
+    while True:
+        chunk = await file.read(chunk_size)
+        if not chunk:
+            break
+        file_size += len(chunk)
+        if file_size > MAX_FILE_SIZE:
+            await file.close()
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large. Maximum size: {MAX_FILE_SIZE // (1024 * 1024)} MB"
+            )
+        temp_chunks.append(chunk)
+
     job_id = str(uuid.uuid4())
 
     # Create temp directory for upload
@@ -88,17 +120,17 @@ async def start_processing_local_file(
     upload_temp_dir.mkdir(parents=True, exist_ok=True)
 
     # Sanitize filename
-    original_filename = file.filename or "uploaded_file"
     safe_stem = "".join(c if c.isalnum() else '_' for c in Path(original_filename).stem)
-    safe_filename = f"{safe_stem}{Path(original_filename).suffix}"
+    safe_filename = f"{safe_stem}{file_ext}"
     local_file_path = upload_temp_dir / safe_filename
 
     try:
         with open(local_file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            for chunk in temp_chunks:
+                buffer.write(chunk)
     except Exception as e:
-        logger.error(f"Failed to save uploaded file {local_file_path}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to save uploaded file: {e}")
+        logger.error(f"Failed to save uploaded file: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save uploaded file")
     finally:
         await file.close()
 

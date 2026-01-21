@@ -121,10 +121,10 @@ def _download_video_sync(url_or_search: str, job_id: str, download_dir: Path) ->
     # Add cookie authentication
     if settings.YTDLP_COOKIES_FILE:
         ydl_opts['cookiefile'] = settings.YTDLP_COOKIES_FILE
-        logger.info(f"Job {job_id}: Using cookies from file: {settings.YTDLP_COOKIES_FILE}")
+        logger.info(f"Job {job_id}: Using cookies from file: [configured]")
     elif settings.YTDLP_COOKIES_FROM_BROWSER:
         ydl_opts['cookiesfrombrowser'] = (settings.YTDLP_COOKIES_FROM_BROWSER,)
-        logger.info(f"Job {job_id}: Using cookies from browser: {settings.YTDLP_COOKIES_FROM_BROWSER}")
+        logger.info(f"Job {job_id}: Using cookies from browser: [configured]")
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:

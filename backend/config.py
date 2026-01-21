@@ -125,6 +125,20 @@ class Settings(BaseSettings):
             return 'large-v3'
         return v
 
+    @field_validator('DEMUCS_MODEL')
+    @classmethod
+    def validate_demucs_model(cls, v: str) -> str:
+        # Whitelist of allowed Demucs models to prevent command injection
+        valid_models = {
+            'htdemucs', 'htdemucs_ft', 'htdemucs_6s',
+            'mdx', 'mdx_extra', 'mdx_extra_q', 'mdx_q',
+            'hdemucs_mmi', 'SIG'
+        }
+        if v not in valid_models:
+            logger.warning(f"Unknown Demucs model '{v}', using default 'mdx_extra_q'")
+            return 'mdx_extra_q'
+        return v
+
 
 @lru_cache()
 def get_settings() -> Settings:
