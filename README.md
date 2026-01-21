@@ -4,6 +4,21 @@
 [![Framework](https://img.shields.io/badge/framework-FastAPI-green.svg)](https://fastapi.tiangolo.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+> **⚠️ DISCLAIMER: This software is provided for educational and personal use only.**
+>
+> This tool is intended for:
+> - Educational purposes (learning about audio processing, ML models, web development)
+> - Personal use with content you own or have explicit permission to use
+> - Research and development purposes
+>
+> **By using this software, you agree that:**
+> - You will only process content that you own, have created, or have explicit permission to use
+> - You are solely responsible for ensuring your use complies with all applicable laws and terms of service
+> - The developers are not responsible for any misuse of this software
+> - This software does not host, store, or distribute any copyrighted content
+>
+> **This project is not affiliated with, endorsed by, or connected to YouTube, Google, or any content creators.**
+
 Transform YouTube videos or search queries into karaoke-style videos with separated instrumental tracks and synchronized lyrics.
 
 This project uses modern tools to download YouTube videos, separate audio stems (vocals, drums, bass, other), transcribe vocals, fetch lyrics from Genius, align them, and merge everything back into a final karaoke video with subtitles.
@@ -157,3 +172,23 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 * [ ] Backend: Asynchronous file cleanup mechanism.
 * [ ] Backend: More sophisticated error handling and reporting.
 * [ ] Testing: Add more comprehensive unit and integration tests.
+
+## ⚖️ Legal Notice
+
+### Intended Use
+This software is designed as an **educational project** demonstrating:
+- Modern Python web development with FastAPI
+- Machine learning integration (Whisper, Demucs)
+- Real-time WebSocket communication
+- Audio/video processing pipelines
+
+### User Responsibility
+- Users must ensure they have the legal right to process any content
+- This tool should only be used with content you own, have created, or have explicit permission to use
+- Users are responsible for compliance with their local laws and all applicable terms of service
+
+### No Warranty
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED. THE AUTHORS ARE NOT LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM THE USE OF THIS SOFTWARE.
+
+### DMCA
+If you believe any content processed using this tool infringes your copyright, please contact the user who processed the content, not the developers of this tool. This software does not host, store, or distribute any content.
