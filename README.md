@@ -147,7 +147,7 @@ This project uses modern tools to download YouTube videos, separate audio stems 
         ```
     * Access the application at `http://localhost:8000`.
 
-## 使い方 (Usage)
+## 📖 Usage
 
 1.  Open the web interface in your browser.
 2.  Enter a YouTube video URL or a search query (e.g., "Song Title Artist").
@@ -161,7 +161,7 @@ This project uses modern tools to download YouTube videos, separate audio stems 
 
 ## 📝 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file (you'll need to create this file) for details.
+This project is licensed under the MIT License.
 
 ## 💡 Future Enhancements
 
